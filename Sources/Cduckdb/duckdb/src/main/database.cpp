@@ -56,7 +56,6 @@ DBConfig::DBConfig() {
 	secret_manager = make_uniq<SecretManager>();
 	http_util = make_shared_ptr<HTTPUtil>();
 	callback_manager = make_uniq<ExtensionCallbackManager>();
-	callback_manager->Register("__open_file__", OpenFileStorageExtension::Create());
 }
 
 DBConfig::DBConfig(bool read_only) : DBConfig::DBConfig() {
@@ -446,6 +445,8 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	if (database_path && !Settings::Get<EnableExternalAccessSetting>(*this)) {
 		config.AddAllowedPath(database_path);
 		config.AddAllowedPath(database_path + string(".wal"));
+		config.AddAllowedPath(database_path + string(".wal.checkpoint"));
+		config.AddAllowedPath(database_path + string(".wal.recovery"));
 		if (!config.options.temporary_directory.empty()) {
 			config.AddAllowedDirectory(config.options.temporary_directory);
 		}
@@ -463,15 +464,21 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	if (!config.allocator) {
 		config.allocator = make_uniq<Allocator>();
 	}
-	auto default_block_size = Settings::Get<DefaultBlockSizeSetting>(config);
-	config.block_allocator = make_uniq<BlockAllocator>(*config.allocator, default_block_size,
-	                                                   DBConfig::GetSystemAvailableMemory(*config.file_system) * 8 / 10,
-	                                                   config.options.block_allocator_size);
+	config.block_allocator = std::move(new_config.block_allocator);
+	if (!config.block_allocator) {
+		auto default_block_size = Settings::Get<DefaultBlockSizeSetting>(config);
+		config.block_allocator = make_uniq<BlockAllocator>(
+		    *config.allocator, default_block_size, DBConfig::GetSystemAvailableMemory(*config.file_system) * 8 / 10,
+		    config.options.block_allocator_size);
+	}
 	config.replacement_scans = std::move(new_config.replacement_scans);
 	if (new_config.callback_manager) {
 		config.callback_manager = std::move(new_config.callback_manager);
 		new_config.callback_manager = make_uniq<ExtensionCallbackManager>();
 	}
+	// This is used to open e.g. parquet files. See DBPathAndType::CheckMagicBytes
+	config.callback_manager->Register("__open_file__", OpenFileStorageExtension::Create());
+
 	config.error_manager = std::move(new_config.error_manager);
 	if (!config.error_manager) {
 		config.error_manager = make_uniq<ErrorManager>();
@@ -520,18 +527,52 @@ SettingLookupResult DatabaseInstance::TryGetCurrentSetting(const string &key, Va
 	return db_config.TryGetCurrentSetting(key, result);
 }
 
-shared_ptr<EncryptionUtil> DatabaseInstance::GetEncryptionUtil() {
-	if (!config.encryption_util || !config.encryption_util->SupportsEncryption()) {
-		ExtensionHelper::TryAutoLoadExtension(*this, "httpfs");
+shared_ptr<EncryptionUtil> DatabaseInstance::GetMbedTLSUtil(bool force_mbedtls) const {
+	auto encryption_util = make_shared_ptr<duckdb_mbedtls::MbedTlsWrapper::AESStateMBEDTLSFactory>();
+
+	if (force_mbedtls) {
+		encryption_util->ForceMbedTLSUnsafe();
+	}
+
+	return encryption_util;
+}
+
+shared_ptr<EncryptionUtil> DatabaseInstance::GetEncryptionUtil(bool read_only) {
+	auto force_mbedtls = config.options.force_mbedtls;
+
+	if (force_mbedtls) {
+		// return mbedtls if setting is enabled
+		return GetMbedTLSUtil(force_mbedtls);
+	}
+
+	if (!config.encryption_util) {
+		// No encryption_util, attempt to get a hold of httpfs
+		if (read_only) {
+			// load is attempted, but no install is performed
+			ExtensionHelper::TryAutoLoadAvailableExtension(*this, "httpfs");
+		} else {
+			// load is attempted, otherwise install+load
+			ExtensionHelper::TryAutoLoadExtension(*this, "httpfs");
+		}
 	}
 
 	if (config.encryption_util) {
+		// already available (potentially via httpfs loading)
 		return config.encryption_util;
 	}
 
-	auto result = make_shared_ptr<duckdb_mbedtls::MbedTlsWrapper::AESStateMBEDTLSFactory>();
+	if (read_only) {
+		// return mbedtls if database is read only
+		// and OpenSSL not set
+		return GetMbedTLSUtil(force_mbedtls);
+	}
 
-	return std::move(result);
+	throw InvalidConfigurationException(" DuckDB currently has a read-only crypto module "
+	                                    "loaded. Please ensure httpfs is loaded using `LOAD httpfs`, or for DuckDB "
+	                                    "database files consider READONLY mode."
+	                                    " To write an encrypted database or parquet file that is NOT securely "
+	                                    "encrypted, one can use SET force_mbedtls_unsafe = "
+	                                    "'true'.");
 }
 
 ValidChecker &DatabaseInstance::GetValidChecker() {

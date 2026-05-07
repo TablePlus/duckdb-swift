@@ -38,20 +38,20 @@ public:
 enum class FilterConversionType { COPY_DIRECTLY, CAST_FILTER, CANNOT_CONVERT };
 
 struct MultiFileColumnMap {
-	MultiFileColumnMap(idx_t index, const LogicalType &local_type, const LogicalType &global_type)
-	    : mapping(index), local_type(local_type), global_type(global_type),
+	MultiFileColumnMap(idx_t index, const LogicalType &local_type_p, const LogicalType &global_type_p)
+	    : mapping(index), local_type(local_type_p), global_type(global_type_p),
 	      filter_conversion(local_type == global_type ? FilterConversionType::COPY_DIRECTLY
 	                                                  : FilterConversionType::CAST_FILTER) {
 	}
-	MultiFileColumnMap(MultiFileIndexMapping mapping_p, const LogicalType &local_type, const LogicalType &global_type,
-	                   FilterConversionType filter_conversion)
-	    : mapping(std::move(mapping_p)), local_type(local_type), global_type(global_type),
+	MultiFileColumnMap(MultiFileIndexMapping mapping_p, const LogicalType &local_type_p,
+	                   const LogicalType &global_type_p, FilterConversionType filter_conversion)
+	    : mapping(std::move(mapping_p)), local_type(local_type_p), global_type(global_type_p),
 	      filter_conversion(filter_conversion) {
 	}
 
 	MultiFileIndexMapping mapping;
-	const LogicalType &local_type;
-	const LogicalType &global_type;
+	const LogicalType local_type;
+	const LogicalType global_type;
 	FilterConversionType filter_conversion;
 };
 
@@ -662,6 +662,15 @@ ResultColumnMapping MultiFileColumnMapper::CreateColumnMappingByMapper(const Col
 			auto expr =
 			    multi_file_reader.GetVirtualColumnExpression(context, reader_data, local_columns, global_column_id,
 			                                                 virtual_column_type, local_idx, global_column_reference);
+			if ((!expr && !global_column_reference) || (expr && global_column_reference.get())) {
+				throw InternalException(R"(
+					The GetVirtualColumnExpression is expected to either:"
+					- return an expression applied in FinalizeChunk to create the value for this global column,
+					  forwarding the (potentially changed) 'global_column_id' to the reader to create the needed data for the expression.
+					- set the 'global_column_reference' to replace this virtual column with a MultiFileColumnDefinition, as if it was defined in the schema.
+					Doing neither or both is not a valid option.
+				)");
+			}
 			if (expr && expr->type == ExpressionType::VALUE_CONSTANT) {
 				// the column is constant after all - handle it
 				expressions.push_back(std::move(expr));
@@ -819,6 +828,10 @@ bool MultiFileColumnMapper::EvaluateFilterAgainstConstant(TableFilter &filter, c
 		auto &struct_filter = filter.Cast<StructFilter>();
 		auto &child_filter = struct_filter.child_filter;
 
+		if (constant.IsNull()) {
+			// NULL struct - filter cannot match (NULL propagation)
+			return false;
+		}
 		if (constant.type().id() != LogicalTypeId::STRUCT) {
 			throw InternalException(
 			    "Constant for this column is not of type struct, but used in a STRUCT_EXTRACT TableFilter");
@@ -1035,8 +1048,20 @@ static unique_ptr<TableFilter> TryCastTableFilter(const TableFilter &global_filt
 }
 
 void SetIndexToZero(unique_ptr<Expression> &root_expr) {
+#ifdef DEBUG
+	optional_idx index;
+	ExpressionIterator::VisitExpressionMutable<BoundReferenceExpression>(root_expr, [&](BoundReferenceExpression &ref,
+	                                                                                    unique_ptr<Expression> &expr) {
+		if (index.IsValid() && index.GetIndex() != ref.index) {
+			throw InternalException("Expected an expression that only references a single column, but found multiple!");
+		}
+		index = ref.index;
+		ref.index = 0;
+	});
+#else
 	ExpressionIterator::VisitExpressionMutable<BoundReferenceExpression>(
 	    root_expr, [&](BoundReferenceExpression &ref, unique_ptr<Expression> &expr) { ref.index = 0; });
+#endif
 }
 
 bool CanPropagateCast(const MultiFileIndexMapping &mapping, const LogicalType &local_type,

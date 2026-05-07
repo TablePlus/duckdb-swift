@@ -30,7 +30,3 @@
 
 #line 0 "src/execution/operator/schema/physical_drop.cpp"
 #include "src/execution/operator/schema/physical_drop.cpp"
-
-#line 0 "src/execution/operator/schema/physical_create_art_index.cpp"
-#include "src/execution/operator/schema/physical_create_art_index.cpp"
-

@@ -1075,6 +1075,7 @@ bool JSONParser::Process(const string &value) {
 	state = JSONState::REGULAR;
 	char quote_char = '"';
 	bool can_parse_value = false;
+	bool in_unquoted_value = false;
 	pos = 0;
 	for (; success && pos < value.size(); pos++) {
 		auto c = value[pos];
@@ -1107,6 +1108,7 @@ bool JSONParser::Process(const string &value) {
 				}
 				separators.pop_back();
 				HandleBracketClose(c);
+				in_unquoted_value = false;
 				break;
 			}
 			case '"':
@@ -1118,6 +1120,7 @@ bool JSONParser::Process(const string &value) {
 			case ',':
 				// comma - move to next line
 				HandleComma(c);
+				in_unquoted_value = false;
 				break;
 			case ':':
 				HandleColon();
@@ -1133,11 +1136,16 @@ bool JSONParser::Process(const string &value) {
 				HandleCharacter(c);
 				break;
 			case ' ':
+				if (in_unquoted_value) {
+					HandleCharacter(c);
+				}
+				break;
 			case '\t':
 			case '\n':
 				// skip whitespace
 				break;
 			default:
+				in_unquoted_value = true;
 				HandleCharacter(c);
 				break;
 			}
@@ -1907,8 +1915,8 @@ void BoxRendererImplementation::ComputeRenderWidths(vector<RenderDataCollection>
 
 	// check if we shortened any columns that would be rendered and if we can expand them
 	// we only expand columns in the ".mode rows", and only if we haven't hidden any columns
-	if (shortened_columns && config.render_mode == RenderMode::ROWS && row_count + 5 < config.max_rows &&
-	    pruned_columns.empty()) {
+	if (shortened_columns && config.render_mode == RenderMode::ROWS && row_count > 0 &&
+	    row_count + 5 < config.max_rows && pruned_columns.empty()) {
 		max_rows_per_row = MaxValue<idx_t>(1, config.max_rows <= 5 ? 0 : (config.max_rows - 5) / row_count);
 		if (max_rows_per_row > 1) {
 			// we can expand rows - check if we should expand any rows
@@ -2215,7 +2223,20 @@ void BoxRendererImplementation::RenderFooter(BaseResultRenderer &ss, idx_t row_c
 		if (!extra_render_str.empty()) {
 			ss.Render(ResultRenderType::FOOTER, extra_render_str);
 		}
-		ss << string(padding, ' ');
+		// can we add the hidden rows hint to this line?
+		if ((has_hidden_columns || has_hidden_rows) && !config.hidden_rows_hint.empty() &&
+		    padding >= config.hidden_rows_hint.size() + 10) {
+			// we can
+			padding -= config.hidden_rows_hint.size();
+			auto lpadding = padding / 2;
+			auto rpadding = padding - lpadding;
+			ss << string(lpadding, ' ');
+			ss.Render(ResultRenderType::FOOTER, config.hidden_rows_hint);
+			ss << string(rpadding, ' ');
+		} else {
+			// we can't - don't render it
+			ss << string(padding, ' ');
+		}
 		ss.Render(ResultRenderType::FOOTER, column_count_str);
 	} else if (render_rows) {
 		idx_t lpadding = padding / 2;

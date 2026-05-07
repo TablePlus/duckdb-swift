@@ -6,6 +6,7 @@
 #include "parquet_shredding.hpp"
 #include "duckdb/function/variant/variant_shredding.hpp"
 #include "duckdb/planner/expression_binder.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 namespace duckdb {
 
@@ -163,9 +164,18 @@ private:
 };
 
 struct ParquetVariantShredding : public VariantShredding {
+	ParquetVariantShredding() {
+		// for parquet untyped ("value") comes before typed ("typed_value")
+		untyped_value_index = 0;
+		typed_value_index = 1;
+	}
+
 	void WriteVariantValues(UnifiedVariantVectorData &variant, Vector &result, optional_ptr<const SelectionVector> sel,
 	                        optional_ptr<const SelectionVector> value_index_sel,
 	                        optional_ptr<const SelectionVector> result_sel, idx_t count) override;
+
+protected:
+	void WriteMissingField(Vector &vector, idx_t index) override;
 };
 
 } // namespace
@@ -335,6 +345,21 @@ static idx_t AnalyzeValueData(const UnifiedVariantVectorData &variant, idx_t row
 	case VariantLogicalType::TIMESTAMP_MICROS_TZ:
 		total_size += sizeof(uint64_t);
 		break;
+	case VariantLogicalType::UINT8:
+		// store as int16_t
+		total_size += sizeof(int16_t);
+		break;
+	case VariantLogicalType::UINT16:
+		// store as int32_t
+		total_size += sizeof(int32_t);
+		break;
+	case VariantLogicalType::UINT32:
+	case VariantLogicalType::UINT64:
+	case VariantLogicalType::UINT128:
+	case VariantLogicalType::INT128:
+		// try to store as int64_t - fail if it doesn't fit
+		total_size += sizeof(int64_t);
+		break;
 	case VariantLogicalType::INTERVAL:
 	case VariantLogicalType::BIGNUM:
 	case VariantLogicalType::BITSTRING:
@@ -342,12 +367,6 @@ static idx_t AnalyzeValueData(const UnifiedVariantVectorData &variant, idx_t row
 	case VariantLogicalType::TIMESTAMP_SEC:
 	case VariantLogicalType::TIME_MICROS_TZ:
 	case VariantLogicalType::TIME_NANOS:
-	case VariantLogicalType::UINT8:
-	case VariantLogicalType::UINT16:
-	case VariantLogicalType::UINT32:
-	case VariantLogicalType::UINT64:
-	case VariantLogicalType::UINT128:
-	case VariantLogicalType::INT128:
 	default:
 		throw InvalidInputException("Can't convert VARIANT of type '%s' to Parquet VARIANT",
 		                            EnumUtil::ToString(type_id));
@@ -366,13 +385,38 @@ void WritePrimitiveTypeHeader(data_ptr_t &value_data) {
 	value_data++;
 }
 
-template <class T>
+struct VariantSimpleCopy {
+	template <class T>
+	static void CopyValue(const_data_ptr_t source, data_ptr_t target) {
+		memcpy(target, source, sizeof(T));
+	}
+};
+
+template <class SRC>
+struct VariantSimpleConversion {
+	template <class T>
+	static void CopyValue(const_data_ptr_t source, data_ptr_t target) {
+		auto src = Load<SRC>(source);
+		Store(static_cast<T>(src), target);
+	}
+};
+
+template <class SRC>
+struct VariantTryConvert {
+	template <class T>
+	static void CopyValue(const_data_ptr_t source, data_ptr_t target) {
+		auto src = Load<SRC>(source);
+		Store(Cast::Operation<SRC, T>(src), target);
+	}
+};
+
+template <class T, class OP = VariantSimpleCopy>
 void CopySimplePrimitiveData(const UnifiedVariantVectorData &variant, data_ptr_t &value_data, idx_t row,
                              uint32_t values_index) {
 	auto byte_offset = variant.GetByteOffset(row, values_index);
 	auto data = const_data_ptr_cast(variant.GetData(row).GetData());
 	auto ptr = data + byte_offset;
-	memcpy(value_data, ptr, sizeof(T));
+	OP::template CopyValue<T>(ptr, value_data);
 	value_data += sizeof(T);
 }
 
@@ -507,6 +551,30 @@ static void WritePrimitiveValueData(const UnifiedVariantVectorData &variant, idx
 		}
 		break;
 	}
+	case VariantLogicalType::UINT8:
+		WritePrimitiveTypeHeader<VariantPrimitiveType::INT16>(value_data);
+		CopySimplePrimitiveData<int16_t, VariantSimpleConversion<uint8_t>>(variant, value_data, row, values_index);
+		break;
+	case VariantLogicalType::UINT16:
+		WritePrimitiveTypeHeader<VariantPrimitiveType::INT32>(value_data);
+		CopySimplePrimitiveData<int32_t, VariantSimpleConversion<uint16_t>>(variant, value_data, row, values_index);
+		break;
+	case VariantLogicalType::UINT32:
+		WritePrimitiveTypeHeader<VariantPrimitiveType::INT64>(value_data);
+		CopySimplePrimitiveData<int64_t, VariantSimpleConversion<uint32_t>>(variant, value_data, row, values_index);
+		break;
+	case VariantLogicalType::UINT64:
+		WritePrimitiveTypeHeader<VariantPrimitiveType::INT64>(value_data);
+		CopySimplePrimitiveData<int64_t, VariantTryConvert<uint64_t>>(variant, value_data, row, values_index);
+		break;
+	case VariantLogicalType::UINT128:
+		WritePrimitiveTypeHeader<VariantPrimitiveType::INT64>(value_data);
+		CopySimplePrimitiveData<int64_t, VariantTryConvert<uhugeint_t>>(variant, value_data, row, values_index);
+		break;
+	case VariantLogicalType::INT128:
+		WritePrimitiveTypeHeader<VariantPrimitiveType::INT64>(value_data);
+		CopySimplePrimitiveData<int64_t, VariantTryConvert<hugeint_t>>(variant, value_data, row, values_index);
+		break;
 	case VariantLogicalType::INTERVAL:
 	case VariantLogicalType::BIGNUM:
 	case VariantLogicalType::BITSTRING:
@@ -514,12 +582,6 @@ static void WritePrimitiveValueData(const UnifiedVariantVectorData &variant, idx
 	case VariantLogicalType::TIMESTAMP_SEC:
 	case VariantLogicalType::TIME_MICROS_TZ:
 	case VariantLogicalType::TIME_NANOS:
-	case VariantLogicalType::UINT8:
-	case VariantLogicalType::UINT16:
-	case VariantLogicalType::UINT32:
-	case VariantLogicalType::UINT64:
-	case VariantLogicalType::UINT128:
-	case VariantLogicalType::INT128:
 	default:
 		throw InvalidInputException("Can't convert VARIANT of type '%s' to Parquet VARIANT",
 		                            EnumUtil::ToString(type_id));
@@ -729,6 +791,11 @@ static void CreateValues(UnifiedVariantVectorData &variant, Vector &value, optio
 	}
 }
 
+void ParquetVariantShredding::WriteMissingField(Vector &vector, idx_t index) {
+	//! The field is missing, set it to null
+	FlatVector::SetNull(vector, index, true);
+}
+
 void ParquetVariantShredding::WriteVariantValues(UnifiedVariantVectorData &variant, Vector &result,
                                                  optional_ptr<const SelectionVector> sel,
                                                  optional_ptr<const SelectionVector> value_index_sel,
@@ -810,7 +877,7 @@ static void ToParquetVariant(DataChunk &input, ExpressionState &state, Vector &r
 	}
 }
 
-void VariantColumnWriter::FinalizeSchema(vector<duckdb_parquet::SchemaElement> &schemas) {
+idx_t VariantColumnWriter::FinalizeSchema(vector<duckdb_parquet::SchemaElement> &schemas) {
 	idx_t schema_idx = schemas.size();
 
 	auto &schema = Schema();
@@ -818,6 +885,7 @@ void VariantColumnWriter::FinalizeSchema(vector<duckdb_parquet::SchemaElement> &
 
 	auto &repetition_type = schema.repetition_type;
 	auto &name = schema.name;
+	auto &field_id = schema.field_id;
 
 	// variant group
 	duckdb_parquet::SchemaElement top_element;
@@ -830,11 +898,17 @@ void VariantColumnWriter::FinalizeSchema(vector<duckdb_parquet::SchemaElement> &
 	top_element.__isset.num_children = true;
 	top_element.__isset.repetition_type = true;
 	top_element.name = name;
+	if (field_id.IsValid()) {
+		top_element.__isset.field_id = true;
+		top_element.field_id = field_id.GetIndex();
+	}
 	schemas.push_back(std::move(top_element));
 
+	idx_t unique_columns = 0;
 	for (auto &child_writer : child_writers) {
-		child_writer->FinalizeSchema(schemas);
+		unique_columns += child_writer->FinalizeSchema(schemas);
 	}
+	return unique_columns;
 }
 
 LogicalType VariantColumnWriter::TransformTypedValueRecursive(const LogicalType &type) {
@@ -866,7 +940,7 @@ LogicalType VariantColumnWriter::TransformTypedValueRecursive(const LogicalType 
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::ARRAY:
-		throw BinderException("'%s' can't appear inside the a 'typed_value' shredded type!", type.ToString());
+		throw BinderException("'%s' can't appear inside a 'typed_value' shredded type!", type.ToString());
 	default:
 		return type;
 	}
@@ -876,7 +950,7 @@ static LogicalType GetParquetVariantType(optional_ptr<LogicalType> shredding = n
 	child_list_t<LogicalType> children;
 	children.emplace_back("metadata", LogicalType::BLOB);
 	children.emplace_back("value", LogicalType::BLOB);
-	if (shredding) {
+	if (shredding && shredding->id() != LogicalTypeId::VARIANT) {
 		children.emplace_back("typed_value", VariantColumnWriter::TransformTypedValueRecursive(*shredding));
 	}
 	auto res = LogicalType::STRUCT(std::move(children));

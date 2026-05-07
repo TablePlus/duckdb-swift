@@ -37,6 +37,9 @@
 #line 0 "src/common/encryption_state.cpp"
 #include "src/common/encryption_state.cpp"
 
+#line 0 "src/common/encryption_types.cpp"
+#include "src/common/encryption_types.cpp"
+
 #line 0 "src/common/exception.cpp"
 #include "src/common/exception.cpp"
 
@@ -54,6 +57,9 @@
 
 #line 0 "src/common/filename_pattern.cpp"
 #include "src/common/filename_pattern.cpp"
+
+#line 0 "src/common/path.cpp"
+#include "src/common/path.cpp"
 
 #line 0 "src/common/fsst.cpp"
 #include "src/common/fsst.cpp"

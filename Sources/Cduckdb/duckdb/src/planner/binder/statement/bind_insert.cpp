@@ -174,34 +174,36 @@ void DoUpdateSetQualify(unique_ptr<ParsedExpression> &expr, const string &table_
 }
 
 unique_ptr<UpdateSetInfo> CreateSetInfoForReplace(TableCatalogEntry &table, InsertStatement &insert,
-                                                  TableStorageInfo &storage_info) {
+                                                  const TableStorageInfo &storage_info) {
 	auto set_info = make_uniq<UpdateSetInfo>();
 
 	auto &columns = set_info->columns;
-	// Figure out which columns are indexed on
-
-	unordered_set<column_t> indexed_columns;
+	// REPLACE is rewritten to UPDATE. Conflict-key columns are used to match existing rows and
+	// should not be part of the SET list.
+	unordered_set<column_t> conflict_columns;
 	for (auto &index : storage_info.index_info) {
+		if (!index.is_unique) {
+			continue;
+		}
 		for (auto &column_id : index.column_set) {
-			indexed_columns.insert(column_id);
+			conflict_columns.insert(column_id);
 		}
 	}
 
 	auto &column_list = table.GetColumns();
 	if (insert.columns.empty()) {
 		for (auto &column : column_list.Physical()) {
-			auto &name = column.Name();
 			// FIXME: can these column names be aliased somehow?
-			if (indexed_columns.count(column.Oid())) {
+			if (conflict_columns.count(column.Oid())) {
 				continue;
 			}
-			columns.push_back(name);
+			columns.push_back(column.Name());
 		}
 	} else {
 		// a list of columns was explicitly supplied, only update those
 		for (auto &name : insert.columns) {
 			auto &column = column_list.GetColumn(name);
-			if (indexed_columns.count(column.Oid())) {
+			if (conflict_columns.count(column.Oid())) {
 				continue;
 			}
 			columns.push_back(name);
@@ -387,9 +389,10 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertStatement &stmt, 
 				named_column_map.push_back(col.Logical());
 			}
 		} else {
+			// Ensure that the columns are valid.
 			for (auto &col_name : stmt.columns) {
-				auto &col = table.GetColumn(col_name);
-				named_column_map.push_back(col.Logical());
+				auto col_idx = table.GetColumnIndex(col_name);
+				named_column_map.push_back(col_idx);
 			}
 		}
 		ExpandDefaultInValuesList(stmt, table, values_list, named_column_map);
@@ -518,11 +521,13 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 		auto merge_into = GenerateMergeInto(stmt, table);
 		return Bind(*merge_into);
 	}
-	if (!table.temporary) {
+	if (table.temporary) {
+		// Temporary inserts still need a catalog dependency so prepared statements are rebound if the table is dropped.
+		GetStatementProperties().RegisterDBRead(table.catalog, context);
+	} else {
 		// inserting into a non-temporary table: alters underlying database
-		auto &properties = GetStatementProperties();
 		DatabaseModificationType modification_type = DatabaseModificationType::INSERT_DATA;
-		properties.RegisterDBModify(table.catalog, context, modification_type);
+		GetStatementProperties().RegisterDBModify(table.catalog, context, modification_type);
 	}
 
 	auto insert = make_uniq<LogicalInsert>(table, GenerateTableIndex());

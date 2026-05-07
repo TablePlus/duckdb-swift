@@ -34,6 +34,8 @@
 #include "duckdb/common/column_index.hpp"
 #include "duckdb/common/table_column.hpp"
 #include "duckdb/common/extra_operator_info.hpp"
+#include "duckdb/storage/table/row_group_reorderer.hpp"
+#include "duckdb/storage/storage_index.hpp"
 
 namespace duckdb {
 
@@ -402,7 +404,7 @@ OrderByNode OrderByNode::Deserialize(Deserializer &deserializer) {
 void PivotColumn::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(100, "pivot_expressions", pivot_expressions);
 	serializer.WritePropertyWithDefault<vector<string>>(101, "unpivot_names", unpivot_names);
-	serializer.WritePropertyWithDefault<vector<PivotColumnEntry>>(102, "entries", entries);
+	serializer.WritePropertyWithDefault<vector<PivotColumnEntry>>(102, "entries", GetEntriesForSerialization(serializer));
 	serializer.WritePropertyWithDefault<string>(103, "pivot_enum", pivot_enum);
 }
 
@@ -412,6 +414,20 @@ PivotColumn PivotColumn::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<vector<string>>(101, "unpivot_names", result.unpivot_names);
 	deserializer.ReadPropertyWithDefault<vector<PivotColumnEntry>>(102, "entries", result.entries);
 	deserializer.ReadPropertyWithDefault<string>(103, "pivot_enum", result.pivot_enum);
+	return result;
+}
+
+void PivotColumnEntry::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<vector<Value>>(100, "values", values);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "star_expr", expr);
+	serializer.WritePropertyWithDefault<string>(102, "alias", alias);
+}
+
+PivotColumnEntry PivotColumnEntry::Deserialize(Deserializer &deserializer) {
+	PivotColumnEntry result;
+	deserializer.ReadPropertyWithDefault<vector<Value>>(100, "values", result.values);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "star_expr", result.expr);
+	deserializer.ReadPropertyWithDefault<string>(102, "alias", result.alias);
 	return result;
 }
 
@@ -455,6 +471,30 @@ unique_ptr<BlockingSample> ReservoirSamplePercentage::Deserialize(Deserializer &
 	auto result = duckdb::unique_ptr<ReservoirSamplePercentage>(new ReservoirSamplePercentage(sample_percentage));
 	deserializer.ReadPropertyWithDefault<idx_t>(201, "reservoir_sample_size", result->reservoir_sample_size);
 	return std::move(result);
+}
+
+void RowGroupOrderOptions::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<StorageIndex>(100, "column_idx", column_idx);
+	serializer.WriteProperty<OrderByStatistics>(101, "order_by", order_by);
+	serializer.WriteProperty<OrderType>(102, "order_type", order_type);
+	serializer.WriteProperty<OrderByNullType>(103, "null_order", null_order);
+	serializer.WriteProperty<OrderByColumnType>(104, "column_type", column_type);
+	serializer.WriteProperty<optional_idx>(105, "row_limit", row_limit);
+	serializer.WritePropertyWithDefault<idx_t>(106, "row_group_offset", row_group_offset);
+	serializer.WritePropertyWithDefault<idx_t>(107, "leading_null_group_offset", leading_null_group_offset);
+}
+
+unique_ptr<RowGroupOrderOptions> RowGroupOrderOptions::Deserialize(Deserializer &deserializer) {
+	auto column_idx = deserializer.ReadProperty<StorageIndex>(100, "column_idx");
+	auto order_by = deserializer.ReadProperty<OrderByStatistics>(101, "order_by");
+	auto order_type = deserializer.ReadProperty<OrderType>(102, "order_type");
+	auto null_order = deserializer.ReadProperty<OrderByNullType>(103, "null_order");
+	auto column_type = deserializer.ReadProperty<OrderByColumnType>(104, "column_type");
+	auto row_limit = deserializer.ReadProperty<optional_idx>(105, "row_limit");
+	auto row_group_offset = deserializer.ReadPropertyWithDefault<idx_t>(106, "row_group_offset");
+	auto leading_null_group_offset = deserializer.ReadPropertyWithDefault<idx_t>(107, "leading_null_group_offset");
+	auto result = duckdb::unique_ptr<RowGroupOrderOptions>(new RowGroupOrderOptions(column_idx, order_by, order_type, null_order, column_type, row_limit, row_group_offset, leading_null_group_offset));
+	return result;
 }
 
 void SampleOptions::Serialize(Serializer &serializer) const {
@@ -632,6 +672,26 @@ SerializedReadCSVData SerializedReadCSVData::Deserialize(Deserializer &deseriali
 	deserializer.ReadProperty<SerializedCSVReaderOptions>(106, "options", result.options);
 	deserializer.ReadProperty<MultiFileReaderBindData>(107, "reader_bind", result.reader_bind);
 	deserializer.ReadPropertyWithDefault<vector<ColumnInfo>>(108, "column_info", result.column_info);
+	return result;
+}
+
+void StorageIndex::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<bool>(100, "has_index", has_index);
+	serializer.WritePropertyWithDefault<idx_t>(101, "index", index);
+	serializer.WritePropertyWithDefault<string>(102, "field", field);
+	serializer.WriteProperty<LogicalType>(103, "type", type);
+	serializer.WriteProperty<StorageIndexType>(104, "index_type", index_type);
+	serializer.WritePropertyWithDefault<vector<StorageIndex>>(105, "child_indexes", child_indexes);
+}
+
+StorageIndex StorageIndex::Deserialize(Deserializer &deserializer) {
+	StorageIndex result;
+	deserializer.ReadPropertyWithDefault<bool>(100, "has_index", result.has_index);
+	deserializer.ReadPropertyWithDefault<idx_t>(101, "index", result.index);
+	deserializer.ReadPropertyWithDefault<string>(102, "field", result.field);
+	deserializer.ReadProperty<LogicalType>(103, "type", result.type);
+	deserializer.ReadProperty<StorageIndexType>(104, "index_type", result.index_type);
+	deserializer.ReadPropertyWithDefault<vector<StorageIndex>>(105, "child_indexes", result.child_indexes);
 	return result;
 }
 
