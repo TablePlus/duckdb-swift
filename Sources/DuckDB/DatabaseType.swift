@@ -92,6 +92,8 @@ public extension DatabaseType {
   static let varchar = DatabaseType(rawValue: DUCKDB_TYPE_VARCHAR.rawValue)
   /// Data type castable to `Data`
   static let blob = DatabaseType(rawValue: DUCKDB_TYPE_BLOB.rawValue)
+  /// Data type castable to `Data`
+  static let geometry = DatabaseType(rawValue: DUCKDB_TYPE_GEOMETRY.rawValue)
   /// Decimal type castable to `Decimal`
   static let decimal = DatabaseType(rawValue: DUCKDB_TYPE_DECIMAL.rawValue)
   /// Timestamp type castable to `Timestamp`
@@ -145,6 +147,7 @@ extension DatabaseType: CustomStringConvertible {
     case .uhugeint: return "\(Self.self).uhugeint"
     case .varchar: return "\(Self.self).varchar"
     case .blob: return "\(Self.self).blob"
+    case .geometry: return "\(Self.self).geometry"
     case .decimal: return "\(Self.self).decimal"
     case .timestampS: return "\(Self.self).timestampS"
     case .timestampMS: return "\(Self.self).timestampMS"
