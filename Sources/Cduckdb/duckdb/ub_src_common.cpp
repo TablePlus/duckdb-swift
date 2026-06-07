@@ -1,5 +1,5 @@
-#line 0 "src/common/allocator.cpp"
-#include "src/common/allocator.cpp"
+#line 0 "src/common/allocator/allocator.cpp"
+#include "src/common/allocator/allocator.cpp"
 
 #line 0 "src/common/assert.cpp"
 #include "src/common/assert.cpp"
