@@ -284,7 +284,7 @@ ArrowErrorCode ArrowMetadataGetValue(const char *metadata, const char *key, cons
 /// Contains more readily extractable values than a raw ArrowSchema.
 /// Clients can stack or statically allocate this structure but are
 /// encouraged to use the provided getters to ensure forward
-/// compatibility.
+/// compatiblity.
 struct ArrowSchemaView {
 	/// \brief A pointer to the schema represented by this view
 	struct ArrowSchema *schema;

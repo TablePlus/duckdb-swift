@@ -83,14 +83,14 @@ struct IcuBindData : public FunctionData {
 	}
 
 	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
-	                      const BoundScalarFunction &function) {
+	                      const ScalarFunction &function) {
 		auto &bind_data = bind_data_p->Cast<IcuBindData>();
 		serializer.WriteProperty(100, "language", bind_data.language);
 		serializer.WriteProperty(101, "country", bind_data.country);
 		serializer.WritePropertyWithDefault<string>(102, "tag", bind_data.tag);
 	}
 
-	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, BoundScalarFunction &function) {
+	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, ScalarFunction &function) {
 		string language;
 		string country;
 		string tag;
@@ -105,8 +105,8 @@ struct IcuBindData : public FunctionData {
 	static string EncodeFunctionName(const string &collation) {
 		return FUNCTION_PREFIX + collation;
 	}
-	static string DecodeFunctionName(const Identifier &fname) {
-		return fname.GetIdentifierName().substr(FUNCTION_PREFIX.size());
+	static string DecodeFunctionName(const string &fname) {
+		return fname.substr(FUNCTION_PREFIX.size());
 	}
 };
 
@@ -131,12 +131,12 @@ static void ICUCollateFunction(DataChunk &args, ExpressionState &state, Vector &
 	const char HEX_TABLE[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &info = func_expr.BindInfo()->Cast<IcuBindData>();
+	auto &info = func_expr.bind_info->Cast<IcuBindData>();
 	auto &collator = *info.collator;
 
 	duckdb::unique_ptr<char[]> buffer;
 	int32_t buffer_size = 0;
-	UnaryExecutor::Execute<string_t, string_t>(args.data[0], result, [&](string_t input) {
+	UnaryExecutor::Execute<string_t, string_t>(args.data[0], result, args.size(), [&](string_t input) {
 		// create a sort key from the string
 		const auto string_size = idx_t(ICUGetSortKey(collator, input, buffer, buffer_size));
 		// convert the sort key to hexadecimal
@@ -153,15 +153,14 @@ static void ICUCollateFunction(DataChunk &args, ExpressionState &state, Vector &
 	});
 }
 
-static duckdb::unique_ptr<FunctionData> ICUCollateBind(BindScalarFunctionInput &input) {
-	auto &bound_function = input.GetBoundFunction();
-
+static duckdb::unique_ptr<FunctionData> ICUCollateBind(ClientContext &context, ScalarFunction &bound_function,
+                                                       vector<duckdb::unique_ptr<Expression>> &arguments) {
 	//! Return a tagged collator
-	if (!bound_function.GetExtraInfo().empty()) {
-		return make_uniq<IcuBindData>(bound_function.GetExtraInfo());
+	if (!bound_function.extra_info.empty()) {
+		return make_uniq<IcuBindData>(bound_function.extra_info);
 	}
 
-	const auto collation = IcuBindData::DecodeFunctionName(bound_function.GetName());
+	const auto collation = IcuBindData::DecodeFunctionName(bound_function.name);
 	auto splits = StringUtil::Split(collation, "_");
 	if (splits.size() == 1) {
 		return make_uniq<IcuBindData>(splits[0], "");
@@ -172,14 +171,18 @@ static duckdb::unique_ptr<FunctionData> ICUCollateBind(BindScalarFunctionInput &
 	}
 }
 
-static duckdb::unique_ptr<FunctionData> ICUSortKeyBind(BindScalarFunctionInput &input) {
-	auto &context = input.GetClientContext();
-	auto &bound_function = input.GetBoundFunction();
-
-	auto val = input.GetNonNullConstant(1).CastAs(context, LogicalType::VARCHAR);
+static duckdb::unique_ptr<FunctionData> ICUSortKeyBind(ClientContext &context, ScalarFunction &bound_function,
+                                                       vector<duckdb::unique_ptr<Expression>> &arguments) {
+	if (!arguments[1]->IsFoldable()) {
+		throw NotImplementedException("ICU_SORT_KEY(VARCHAR, VARCHAR) with non-constant collation is not supported");
+	}
+	Value val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]).CastAs(context, LogicalType::VARCHAR);
+	if (val.IsNull()) {
+		throw NotImplementedException("ICU_SORT_KEY(VARCHAR, VARCHAR) expected a non-null collation");
+	}
 	//! Verify tagged collation
-	if (!bound_function.GetExtraInfo().empty()) {
-		return make_uniq<IcuBindData>(bound_function.GetExtraInfo());
+	if (!bound_function.extra_info.empty()) {
+		return make_uniq<IcuBindData>(bound_function.extra_info);
 	}
 	auto splits = StringUtil::Split(StringValue::Get(val), "_");
 	if (splits.size() == 1) {
@@ -193,8 +196,7 @@ static duckdb::unique_ptr<FunctionData> ICUSortKeyBind(BindScalarFunctionInput &
 
 static ScalarFunction GetICUCollateFunction(const string &collation, const string &tag) {
 	string fname = IcuBindData::EncodeFunctionName(collation);
-	ScalarFunction result(Identifier(fname), {LogicalType::VARCHAR}, LogicalType::VARCHAR, ICUCollateFunction,
-	                      ICUCollateBind);
+	ScalarFunction result(fname, {LogicalType::VARCHAR}, LogicalType::VARCHAR, ICUCollateFunction, ICUCollateBind);
 	//! collation tag is added into the Function extra info
 	result.extra_info = tag;
 	result.SetSerializeCallback(IcuBindData::Serialize);
@@ -383,10 +385,6 @@ static duckdb::unique_ptr<GlobalTableFunctionState> ICUCalendarInit(ClientContex
 static void ICUCalendarFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.global_state->Cast<ICUCalendarData>();
 	idx_t index = 0;
-
-	// name, VARCHAR
-	auto &name_col = output.data[0];
-
 	while (index < STANDARD_VECTOR_SIZE) {
 		if (!data.calendars) {
 			break;
@@ -401,10 +399,11 @@ static void ICUCalendarFunction(ClientContext &context, TableFunctionInput &data
 		//	The calendar name is all we have
 		std::string utf8;
 		calendar->toUTF8String(utf8);
-		name_col.Append(Value(utf8));
+		output.SetValue(0, index, Value(utf8));
 
 		++index;
 	}
+	output.SetCardinality(index);
 }
 
 static void SetICUCalendar(ClientContext &context, SetScope scope, Value &parameter) {
@@ -464,7 +463,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 		}
 		collation = StringUtil::Lower(collation);
 
-		CreateCollationInfo info(Identifier(collation), GetICUCollateFunction(collation, ""), false, false);
+		CreateCollationInfo info(collation, GetICUCollateFunction(collation, ""), false, false);
 		loader.RegisterCollation(info);
 	}
 
@@ -482,8 +481,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                         false);
 	loader.RegisterCollation(info);
 
-	ScalarFunction sort_key("icu_sort_key", {{"str", LogicalType::VARCHAR}, {"collator", LogicalType::VARCHAR}},
-	                        LogicalType::VARCHAR, ICUCollateFunction, ICUSortKeyBind);
+	ScalarFunction sort_key("icu_sort_key", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                        ICUCollateFunction, ICUSortKeyBind);
 	loader.RegisterFunction(sort_key);
 
 	// Time Zones

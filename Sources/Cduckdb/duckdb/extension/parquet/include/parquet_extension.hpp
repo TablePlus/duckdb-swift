@@ -8,13 +8,9 @@
 
 #pragma once
 
-#include <string>
-
 #include "duckdb.hpp"
-#include "duckdb/main/extension.hpp"
 
 namespace duckdb {
-class ExtensionLoader;
 
 class ParquetExtension : public Extension {
 public:

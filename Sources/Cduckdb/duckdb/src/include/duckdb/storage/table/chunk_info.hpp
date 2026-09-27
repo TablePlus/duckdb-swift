@@ -40,15 +40,15 @@ public:
 	//! with the tuples
 	virtual idx_t GetSelVector(ScanOptions options, optional_ptr<SelectionVector> sel_vector,
 	                           idx_t max_count) const = 0;
+	idx_t GetCheckpointRowCount(TransactionData transaction, idx_t max_count);
 	//! Returns whether or not a single row in the ChunkInfo should be used or not for the given transaction
 	virtual bool Fetch(TransactionData transaction, row_t row) = 0;
 	virtual void CommitAppend(transaction_t commit_id, idx_t start, idx_t end) = 0;
-	idx_t GetRowCount(ScanOptions options, idx_t max_count);
+	idx_t GetCommittedDeletedCount(idx_t max_count) const;
 	virtual bool Cleanup(transaction_t lowest_transaction) const;
 	virtual string ToString(idx_t max_count) const = 0;
 
 	virtual bool HasDeletes(transaction_t transaction_id = MAX_TRANSACTION_ID) const = 0;
-	virtual bool HasUncommittedChanges() const = 0;
 
 	virtual void Write(WriteStream &writer, transaction_t transaction_id) const;
 	static unique_ptr<ChunkInfo> Read(FixedSizeAllocator &allocator, ReadStream &reader);
@@ -89,7 +89,6 @@ public:
 	string ToString(idx_t max_count) const override;
 
 	bool HasDeletes(transaction_t transaction_id = MAX_TRANSACTION_ID) const override;
-	bool HasUncommittedChanges() const override;
 
 	void Write(WriteStream &writer, transaction_t transaction_id) const override;
 	static unique_ptr<ChunkInfo> Read(ReadStream &reader);
@@ -125,7 +124,6 @@ public:
 	void CommitDelete(transaction_t commit_id, const DeleteInfo &info);
 
 	bool HasDeletes(transaction_t transaction_id = MAX_TRANSACTION_ID) const override;
-	bool HasUncommittedChanges() const override;
 	bool AnyDeleted() const;
 	bool HasConstantInsertionId() const;
 	transaction_t ConstantInsertId() const;

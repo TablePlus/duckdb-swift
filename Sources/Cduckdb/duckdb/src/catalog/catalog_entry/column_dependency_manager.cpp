@@ -18,10 +18,10 @@ void ColumnDependencyManager::AddGeneratedColumn(const ColumnDefinition &column,
 	column.GetListOfDependencies(referenced_columns);
 	vector<LogicalIndex> indices;
 	for (auto &col : referenced_columns) {
-		if (!list.ColumnExists(Identifier(col))) {
+		if (!list.ColumnExists(col)) {
 			throw BinderException("Column \"%s\" referenced by generated column does not exist", col);
 		}
-		auto &entry = list.GetColumn(Identifier(col));
+		auto &entry = list.GetColumn(col);
 		indices.push_back(entry.Logical());
 	}
 	return AddGeneratedColumn(column.Logical(), indices);

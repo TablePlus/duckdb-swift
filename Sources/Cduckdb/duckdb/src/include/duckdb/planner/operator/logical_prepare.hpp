@@ -22,8 +22,7 @@ public:
 	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_PREPARE;
 
 public:
-	LogicalPrepare(Identifier name_p, shared_ptr<PreparedStatementData> prepared,
-	               unique_ptr<LogicalOperator> logical_plan)
+	LogicalPrepare(string name_p, shared_ptr<PreparedStatementData> prepared, unique_ptr<LogicalOperator> logical_plan)
 	    : LogicalOperator(LogicalOperatorType::LOGICAL_PREPARE), name(std::move(name_p)),
 	      prepared(std::move(prepared)) {
 		if (logical_plan) {
@@ -31,7 +30,7 @@ public:
 		}
 	}
 
-	Identifier name;
+	string name;
 	shared_ptr<PreparedStatementData> prepared;
 
 public:

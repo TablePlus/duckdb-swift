@@ -9,8 +9,6 @@
 #pragma once
 
 #include "duckdb/common/types/column/column_data_collection.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/list_vector.hpp"
 #include "core_functions/aggregate/quantile_helpers.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/operator/interpolate.hpp"
@@ -32,7 +30,7 @@ struct QuantileCursor {
 		inputs.InitializeScanChunk(scan, page);
 
 		D_ASSERT(partition.all_valid.size() == 1);
-		cannot_have_null = partition.all_valid[0];
+		all_valid = partition.all_valid[0];
 	}
 
 	inline sel_t RowOffset(idx_t row_idx) const {
@@ -48,7 +46,7 @@ struct QuantileCursor {
 		if (!RowIsVisible(row_idx)) {
 			inputs.Seek(row_idx, scan, page);
 			data = FlatVector::GetData<INPUT_TYPE>(page.data[0]);
-			validity = &FlatVector::ValidityMutable(page.data[0]);
+			validity = &FlatVector::Validity(page.data[0]);
 		}
 		return RowOffset(row_idx);
 	}
@@ -63,8 +61,8 @@ struct QuantileCursor {
 		return validity->RowIsValid(offset);
 	}
 
-	inline bool CannotHaveNull() {
-		return cannot_have_null;
+	inline bool AllValid() {
+		return all_valid;
 	}
 
 	//! Windowed paging
@@ -78,7 +76,7 @@ struct QuantileCursor {
 	//! The validity mask
 	const ValidityMask *validity = nullptr;
 	//! Paged chunks do not track this but it is really necessary for performance
-	bool cannot_have_null;
+	bool all_valid;
 };
 
 // Direct access
@@ -293,11 +291,8 @@ struct QuantileIncluded {
 		return fmask.RowIsValid(idx) && dmask.RowIsValid(idx);
 	}
 
-	inline bool CannotHaveNull() {
-		return fmask.CannotHaveNull() && dmask.CannotHaveNull();
-	}
 	inline bool AllValid() {
-		return CannotHaveNull();
+		return fmask.AllValid() && dmask.AllValid();
 	}
 
 	const ValidityMask &fmask;
@@ -334,9 +329,9 @@ struct QuantileSortTree {
 		SelectionVector filter_sel(STANDARD_VECTOR_SIZE);
 		while (inputs.Scan(scan, sort)) {
 			const auto row_idx = scan.current_row_index;
-			if (filter_mask.CanHaveNull() || !partition.all_valid[0]) {
+			if (!filter_mask.AllValid() || !partition.all_valid[0]) {
 				auto &key = sort.data[0];
-				auto &validity = FlatVector::ValidityMutable(key);
+				auto &validity = FlatVector::Validity(key);
 				idx_t filtered = 0;
 				for (sel_t i = 0; i < sort.size(); ++i) {
 					if (filter_mask.RowIsValid(i + row_idx) && validity.RowIsValid(i)) {
@@ -363,7 +358,7 @@ struct QuantileSortTree {
 		//	Thread safe and idempotent.
 		index_tree->Build();
 
-		//	Find the interpolated indices within the frame
+		//	Find the interpolated indicies within the frame
 		QuantileInterpolator<DISCRETE> interp(q, n, false);
 		const auto lo_data = SelectNth(frames, interp.FRN);
 		auto hi_data = lo_data;
@@ -386,15 +381,15 @@ struct QuantileSortTree {
 		index_tree->Build();
 
 		// Result is a constant LIST<CHILD_TYPE> with a fixed length
-		auto ldata = FlatVector::GetDataMutable<list_entry_t>(list);
+		auto ldata = FlatVector::GetData<list_entry_t>(list);
 		auto &lentry = ldata[lidx];
 		lentry.offset = ListVector::GetListSize(list);
 		lentry.length = bind_data.quantiles.size();
 
 		ListVector::Reserve(list, lentry.offset + lentry.length);
 		ListVector::SetListSize(list, lentry.offset + lentry.length);
-		auto &result = ListVector::GetChildMutable(list);
-		auto rdata = FlatVector::GetDataMutable<CHILD_TYPE>(result);
+		auto &result = ListVector::GetEntry(list);
+		auto rdata = FlatVector::GetData<CHILD_TYPE>(result);
 
 		using ID = QuantileIndirect<INPUT_TYPE>;
 		ID indirect(data);

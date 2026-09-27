@@ -368,8 +368,10 @@ date_t Date::FromString(const string &str, bool strict) {
 string Date::ToString(date_t date) {
 	// PG displays temporal infinities in lowercase,
 	// but numerics in Titlecase.
-	if (!date.IsFinite()) {
-		return ToInfinity(date);
+	if (date == date_t::infinity()) {
+		return PINF.str;
+	} else if (date == date_t::ninfinity()) {
+		return NINF.str;
 	}
 	int32_t date_units[3];
 	idx_t year_length;

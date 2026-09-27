@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/map_vector.hpp"
 #include "core_functions/scalar/map_functions.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -16,9 +15,9 @@ static void MapFunctionEmptyInput(Vector &result, const idx_t row_count) {
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	ListVector::SetListSize(result, 0);
 
-	auto result_data = ConstantVector::GetData<list_entry_t>(result);
+	auto result_data = ListVector::GetData(result);
 	result_data[0] = list_entry_t();
-	result.Verify();
+	result.Verify(row_count);
 }
 
 static bool MapIsNull(DataChunk &chunk) {
@@ -26,8 +25,8 @@ static bool MapIsNull(DataChunk &chunk) {
 		return false;
 	}
 	D_ASSERT(chunk.data.size() == 2);
-	const auto &keys = chunk.data[0];
-	const auto &values = chunk.data[1];
+	auto &keys = chunk.data[0];
+	auto &values = chunk.data[1];
 
 	if (keys.GetType().id() == LogicalTypeId::SQLNULL) {
 		return true;
@@ -44,8 +43,9 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	// - STRUCTs have exactly two fields, a key-field, and a value-field
 	// - key names are unique
 	D_ASSERT(result.GetType().id() == LogicalTypeId::MAP);
+
 	if (MapIsNull(args)) {
-		auto &validity = FlatVector::ValidityMutable(result);
+		auto &validity = FlatVector::Validity(result);
 		validity.SetInvalid(0);
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 		return;
@@ -63,26 +63,30 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 
 	// a LIST vector, where each row contains a LIST of KEYS
 	UnifiedVectorFormat keys_data;
-	keys.ToUnifiedFormat(keys_data);
+	keys.ToUnifiedFormat(row_count, keys_data);
 	auto keys_entries = UnifiedVectorFormat::GetData<list_entry_t>(keys_data);
 
 	// the KEYs child vector
-	auto &keys_child_vector = ListVector::GetChildMutable(keys);
+	auto keys_child_vector = ListVector::GetEntry(keys);
 	UnifiedVectorFormat keys_child_data;
-	keys_child_vector.ToUnifiedFormat(keys_child_data);
+	keys_child_vector.ToUnifiedFormat(ListVector::GetListSize(keys), keys_child_data);
 
 	// a LIST vector, where each row contains a LIST of VALUES
 	UnifiedVectorFormat values_data;
-	values.ToUnifiedFormat(values_data);
+	values.ToUnifiedFormat(row_count, values_data);
 	auto values_entries = UnifiedVectorFormat::GetData<list_entry_t>(values_data);
 
 	// the VALUEs child vector
-	auto &values_child_vector = ListVector::GetChildMutable(values);
+	auto values_child_vector = ListVector::GetEntry(values);
 	UnifiedVectorFormat values_child_data;
-	values_child_vector.ToUnifiedFormat(values_child_data);
+	values_child_vector.ToUnifiedFormat(ListVector::GetListSize(values), values_child_data);
 
 	// a LIST vector, where each row contains a MAP (LIST of STRUCTs)
-	auto result_entries = FlatVector::Writer<list_entry_t>(result, row_count);
+	UnifiedVectorFormat result_data;
+	result.ToUnifiedFormat(row_count, result_data);
+	auto result_entries = UnifiedVectorFormat::GetDataNoConst<list_entry_t>(result_data);
+
+	auto &result_validity = FlatVector::Validity(result);
 
 	// get the resulting size of the key/value child lists
 	idx_t result_child_size = 0;
@@ -104,10 +108,11 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	for (idx_t row_idx = 0; row_idx < row_count; row_idx++) {
 		auto keys_idx = keys_data.sel->get_index(row_idx);
 		auto values_idx = values_data.sel->get_index(row_idx);
+		auto result_idx = result_data.sel->get_index(row_idx);
 
 		// NULL MAP
 		if (!keys_data.validity.RowIsValid(keys_idx) || !values_data.validity.RowIsValid(values_idx)) {
-			result_entries.WriteNull();
+			result_validity.SetInvalid(row_idx);
 			continue;
 		}
 
@@ -142,7 +147,8 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 		}
 
 		// keys_entry and values_entry have the same length
-		result_entries.WriteValue(list_entry_t(offset, keys_entry.length));
+		result_entries[result_idx].length = keys_entry.length;
+		result_entries[result_idx].offset = offset;
 		offset += keys_entry.length;
 	}
 	D_ASSERT(offset == result_child_size);
@@ -152,11 +158,15 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 
 	ListVector::SetListSize(result, offset);
 	result_key_vector.Slice(keys_child_vector, sel_keys, offset);
-	result_key_vector.Flatten();
+	result_key_vector.Flatten(offset);
 	result_value_vector.Slice(values_child_vector, sel_values, offset);
-	result_value_vector.Flatten();
-	FlatVector::ValidityMutable(ListVector::GetChildMutable(result)).Resize(result_child_size);
-	result.Verify();
+	result_value_vector.Flatten(offset);
+	FlatVector::Validity(ListVector::GetEntry(result)).Resize(result_child_size);
+
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+	result.Verify(row_count);
 }
 
 ScalarFunctionSet MapFun::GetFunctions() {

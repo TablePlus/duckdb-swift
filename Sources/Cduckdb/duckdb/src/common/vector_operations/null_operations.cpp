@@ -4,53 +4,56 @@
 // IS NULL/NOT IS NULL operators
 //===--------------------------------------------------------------------===//
 
-#include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 namespace duckdb {
 
 template <bool INVERSE>
-static void IsNullLoop(const Vector &input, Vector &result) {
+static void IsNullLoop(Vector &input, Vector &result, idx_t count) {
 	D_ASSERT(result.GetType() == LogicalType::BOOLEAN);
 
-	auto count = input.size();
 	if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 		auto result_data = ConstantVector::GetData<bool>(result);
 		*result_data = INVERSE ? !ConstantVector::IsNull(input) : ConstantVector::IsNull(input);
 	} else {
+		UnifiedVectorFormat data;
+		input.ToUnifiedFormat(count, data);
+
 		result.SetVectorType(VectorType::FLAT_VECTOR);
-		auto result_data = FlatVector::Writer<bool>(result, count);
-		auto entries = input.Validity();
+		auto result_data = FlatVector::GetData<bool>(result);
 		for (idx_t i = 0; i < count; i++) {
-			result_data.WriteValue(INVERSE ? entries.IsValid(i) : !entries.IsValid(i));
+			auto idx = data.sel->get_index(i);
+			result_data[i] = INVERSE ? data.validity.RowIsValid(idx) : !data.validity.RowIsValid(idx);
 		}
 	}
 }
 
-void VectorOperations::IsNotNull(const Vector &input, Vector &result) {
-	IsNullLoop<true>(input, result);
+void VectorOperations::IsNotNull(Vector &input, Vector &result, idx_t count) {
+	IsNullLoop<true>(input, result, count);
 }
 
-void VectorOperations::IsNull(const Vector &input, Vector &result) {
-	IsNullLoop<false>(input, result);
+void VectorOperations::IsNull(Vector &input, Vector &result, idx_t count) {
+	IsNullLoop<false>(input, result, count);
 }
 
-bool VectorOperations::HasNotNull(const Vector &input) {
-	auto count = input.size();
+bool VectorOperations::HasNotNull(Vector &input, idx_t count) {
 	if (count == 0) {
 		return false;
 	}
 	if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		return !ConstantVector::IsNull(input);
 	} else {
-		auto entries = input.Validity();
-		if (!entries.CanHaveNull()) {
+		UnifiedVectorFormat data;
+		input.ToUnifiedFormat(count, data);
+
+		if (data.validity.AllValid()) {
 			return true;
 		}
 		for (idx_t i = 0; i < count; i++) {
-			if (entries.IsValid(i)) {
+			auto idx = data.sel->get_index(i);
+			if (data.validity.RowIsValid(idx)) {
 				return true;
 			}
 		}
@@ -58,20 +61,22 @@ bool VectorOperations::HasNotNull(const Vector &input) {
 	}
 }
 
-bool VectorOperations::HasNull(const Vector &input) {
-	auto count = input.size();
+bool VectorOperations::HasNull(Vector &input, idx_t count) {
 	if (count == 0) {
 		return false;
 	}
 	if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		return ConstantVector::IsNull(input);
 	} else {
-		auto entries = input.Validity();
-		if (!entries.CanHaveNull()) {
+		UnifiedVectorFormat data;
+		input.ToUnifiedFormat(count, data);
+
+		if (data.validity.AllValid()) {
 			return false;
 		}
 		for (idx_t i = 0; i < count; i++) {
-			if (!entries.IsValid(i)) {
+			auto idx = data.sel->get_index(i);
+			if (!data.validity.RowIsValid(idx)) {
 				return true;
 			}
 		}
@@ -79,31 +84,30 @@ bool VectorOperations::HasNull(const Vector &input) {
 	}
 }
 
-idx_t VectorOperations::CountNotNull(const Vector &input) {
-	auto count = input.size();
+idx_t VectorOperations::CountNotNull(Vector &input, const idx_t count) {
+	idx_t valid = 0;
 
+	UnifiedVectorFormat vdata;
+	input.ToUnifiedFormat(count, vdata);
+	if (vdata.validity.AllValid()) {
+		return count;
+	}
 	switch (input.GetVectorType()) {
 	case VectorType::FLAT_VECTOR:
-		return FlatVector::Validity(input).CountValid(count);
+		valid += vdata.validity.CountValid(count);
+		break;
 	case VectorType::CONSTANT_VECTOR:
-		if (!ConstantVector::IsNull(input)) {
-			return count;
-		}
-		return 0;
-	default: {
-		auto validity = input.Validity();
-		if (validity.CannotHaveNull()) {
-			return count;
-		}
-		idx_t valid = 0;
+		valid += vdata.validity.CountValid(1) * count;
+		break;
+	default:
 		for (idx_t i = 0; i < count; ++i) {
-			if (validity.IsValid(i)) {
-				valid++;
-			}
+			const auto row_idx = vdata.sel->get_index(i);
+			valid += idx_t(vdata.validity.RowIsValid(row_idx));
 		}
-		return valid;
+		break;
 	}
-	}
+
+	return valid;
 }
 
 } // namespace duckdb

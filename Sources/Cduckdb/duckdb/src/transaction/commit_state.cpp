@@ -21,8 +21,6 @@
 #include "duckdb/transaction/update_info.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
-#include "duckdb/storage/data_table.hpp"
-#include "duckdb/common/types/data_chunk.hpp"
 
 namespace duckdb {
 
@@ -36,7 +34,7 @@ void CommitDropState::DropBlock(block_id_t block_id) {
 	dropped_block_ids.push_back(block_id);
 }
 
-void CommitDropState::RemoveIndex(TableIndexList &indexes, Identifier name) {
+void CommitDropState::RemoveIndex(TableIndexList &indexes, string name) {
 	pending_index_removals.push_back(PendingIndexRemoval {indexes, std::move(name)});
 }
 
@@ -68,7 +66,7 @@ IndexDataRemover::IndexDataRemover(DuckTransaction &transaction_p, QueryContext 
 }
 
 void IndexDataRemover::PushDelete(DeleteInfo &info) {
-	auto &version_table = info.table->GetStorage();
+	auto &version_table = *info.table;
 	if (!version_table.HasIndexes()) {
 		// this table has no indexes: no cleanup to be done
 		return;
@@ -111,7 +109,7 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 #endif
 
 	// set up the row identifiers vector
-	Vector row_identifiers(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers), count);
+	Vector row_identifiers(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers));
 
 	auto active_checkpoint = transaction.GetTransactionManager().Cast<DuckTransactionManager>().GetActiveCheckpoint();
 	auto checkpoint_id = active_checkpoint == MAX_TRANSACTION_ID ? optional_idx() : active_checkpoint;
@@ -164,7 +162,6 @@ void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, Commi
 	auto &parent = entry.Parent();
 
 	switch (parent.type) {
-	case CatalogType::TRIGGER_ENTRY:
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
 	case CatalogType::INDEX_ENTRY:
@@ -200,7 +197,6 @@ void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, Commi
 			case CatalogType::TYPE_ENTRY:
 			case CatalogType::MACRO_ENTRY:
 			case CatalogType::TABLE_MACRO_ENTRY:
-			case CatalogType::TRIGGER_ENTRY:
 				(void)column_name;
 				break;
 			default:
@@ -215,7 +211,6 @@ void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, Commi
 			case CatalogType::TYPE_ENTRY:
 			case CatalogType::MACRO_ENTRY:
 			case CatalogType::TABLE_MACRO_ENTRY:
-			case CatalogType::TRIGGER_ENTRY:
 				break;
 			default:
 				throw InternalException("Don't know how to create this type!");
@@ -277,6 +272,15 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 		D_ASSERT(catalog.IsDuckCatalog());
 
 		auto &new_entry = old_entry.Parent();
+		if (old_entry.type == CatalogType::TABLE_ENTRY && new_entry.type == CatalogType::TABLE_ENTRY) {
+			auto &old_storage = old_entry.Cast<DuckTableEntry>().GetStorage();
+			auto &new_storage = new_entry.Cast<DuckTableEntry>().GetStorage();
+			if (!RefersToSameObject(old_storage, new_storage) && old_storage.IsMainTable()) {
+				throw TransactionException("Failed to alter table \"%s\" because the underlying table state was "
+				                           "reverted by a concurrent transaction",
+				                           old_entry.name);
+			}
+		}
 		if (new_entry.type == CatalogType::DEPENDENCY_ENTRY) {
 			auto &dep = new_entry.Cast<DependencyEntry>();
 			if (dep.Side() == DependencyEntryType::SUBJECT) {
@@ -299,24 +303,22 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 	case UndoFlags::INSERT_TUPLE: {
 		// append:
 		auto info = reinterpret_cast<AppendInfo *>(data);
-		if (info->table->HasParent() && info->table->Parent().timestamp != transaction.transaction_id) {
-			auto &storage = info->table->GetStorage();
-			auto table_name = storage.GetTableName();
-			auto table_modification = storage.TableModification();
+		if (!info->table->IsMainTable()) {
+			auto table_name = info->table->GetTableName();
+			auto table_modification = info->table->TableModification();
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
 		// mark the tuples as committed
-		info->table->GetStorage().CommitAppend(commit_id, info->start_row, info->count);
+		info->table->CommitAppend(commit_id, info->start_row, info->count);
 		break;
 	}
 	case UndoFlags::DELETE_TUPLE: {
 		// deletion:
 		auto info = reinterpret_cast<DeleteInfo *>(data);
-		if (info->table->HasParent() && info->table->Parent().timestamp != transaction.transaction_id) {
-			auto &storage = info->table->GetStorage();
-			auto table_name = storage.GetTableName();
-			auto table_modification = storage.TableModification();
+		if (!info->table->IsMainTable()) {
+			auto table_name = info->table->GetTableName();
+			auto table_modification = info->table->TableModification();
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
@@ -326,10 +328,9 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 	case UndoFlags::UPDATE_TUPLE: {
 		// update:
 		auto info = reinterpret_cast<UpdateInfo *>(data);
-		if (info->table->HasParent() && info->table->Parent().timestamp != transaction.transaction_id) {
-			auto &storage = info->table->GetStorage();
-			auto table_name = storage.GetTableName();
-			auto table_modification = storage.TableModification();
+		if (!info->table->IsMainTable()) {
+			auto table_name = info->table->GetTableName();
+			auto table_modification = info->table->TableModification();
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
@@ -368,7 +369,7 @@ void CommitState::RevertCommit(UndoFlags type, data_ptr_t data) {
 	case UndoFlags::INSERT_TUPLE: {
 		auto info = reinterpret_cast<AppendInfo *>(data);
 		// revert this append
-		info->table->GetStorage().RevertAppend(transaction, info->start_row, info->count);
+		info->table->RevertAppend(transaction, info->start_row, info->count);
 		break;
 	}
 	case UndoFlags::DELETE_TUPLE: {

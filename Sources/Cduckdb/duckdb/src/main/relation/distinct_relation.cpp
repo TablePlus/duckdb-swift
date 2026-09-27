@@ -17,7 +17,7 @@ unique_ptr<QueryNode> DistinctRelation::GetQueryNode() {
 	return child_node;
 }
 
-Identifier DistinctRelation::GetAlias() {
+string DistinctRelation::GetAlias() {
 	return child->GetAlias();
 }
 

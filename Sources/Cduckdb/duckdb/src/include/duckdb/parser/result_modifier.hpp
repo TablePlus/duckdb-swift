@@ -20,10 +20,8 @@ enum class ResultModifierType : uint8_t {
 	LIMIT_MODIFIER = 1,
 	ORDER_MODIFIER = 2,
 	DISTINCT_MODIFIER = 3,
-	LEGACY_LIMIT_PERCENT_MODIFIER = 4
+	LIMIT_PERCENT_MODIFIER = 4
 };
-
-enum class LimitValueType : uint8_t { ROW_COUNT = 0, PERCENTAGE = 1 };
 
 const char *ToString(ResultModifierType value);
 ResultModifierType ResultModifierFromString(const char *value);
@@ -94,19 +92,14 @@ public:
 	LimitModifier() : ResultModifier(ResultModifierType::LIMIT_MODIFIER) {
 	}
 
-	//! LIMIT
+	//! LIMIT count
 	unique_ptr<ParsedExpression> limit;
 	//! OFFSET
 	unique_ptr<ParsedExpression> offset;
-	//! Limit type (row count or percentage)
-	LimitValueType limit_type = LimitValueType::ROW_COUNT;
 
 public:
 	bool Equals(const ResultModifier &other) const override;
 	unique_ptr<ResultModifier> Copy() const override;
-
-	bool UseLegacySerialization() const;
-	void LegacySerialize(Serializer &serializer) const;
 
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<ResultModifier> Deserialize(Deserializer &deserializer);
@@ -152,12 +145,12 @@ public:
 	static unique_ptr<ResultModifier> Deserialize(Deserializer &deserializer);
 };
 
-class LegacyLimitPercentModifier : public ResultModifier {
+class LimitPercentModifier : public ResultModifier {
 public:
-	static constexpr const ResultModifierType TYPE = ResultModifierType::LEGACY_LIMIT_PERCENT_MODIFIER;
+	static constexpr const ResultModifierType TYPE = ResultModifierType::LIMIT_PERCENT_MODIFIER;
 
 public:
-	LegacyLimitPercentModifier() : ResultModifier(ResultModifierType::LEGACY_LIMIT_PERCENT_MODIFIER) {
+	LimitPercentModifier() : ResultModifier(ResultModifierType::LIMIT_PERCENT_MODIFIER) {
 	}
 
 	//! LIMIT %
@@ -168,11 +161,9 @@ public:
 public:
 	bool Equals(const ResultModifier &other) const override;
 	unique_ptr<ResultModifier> Copy() const override;
+
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<ResultModifier> Deserialize(Deserializer &deserializer);
-
-	static unique_ptr<ResultModifier> DeserializeLegacyLimitPercentModifier(unique_ptr<ParsedExpression> limit,
-	                                                                        unique_ptr<ParsedExpression> offset);
 };
 
 } // namespace duckdb

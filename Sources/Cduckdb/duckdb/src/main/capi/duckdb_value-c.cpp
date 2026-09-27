@@ -136,9 +136,6 @@ duckdb_bignum duckdb_get_bignum(duckdb_value val) {
 	duckdb::Bignum::GetByteArray(byte_array, is_negative, duckdb::string_t(str));
 	auto size = byte_array.size();
 	auto data = reinterpret_cast<uint8_t *>(malloc(size));
-	if (!data) {
-		return {nullptr, 0, is_negative};
-	}
 	memcpy(data, byte_array.data(), size);
 	return {data, size, is_negative};
 }
@@ -189,7 +186,7 @@ duckdb_value duckdb_create_time(duckdb_time input) {
 	return CAPICreateValue(duckdb::dtime_t(input.micros));
 }
 duckdb_time duckdb_get_time(duckdb_value val) {
-	return {CAPIGetValue<duckdb::dtime_t, LogicalTypeId::TIME>(val).value};
+	return {CAPIGetValue<duckdb::dtime_t, LogicalTypeId::TIME>(val).micros};
 }
 duckdb_value duckdb_create_time_tz_value(duckdb_time_tz input) {
 	return CAPICreateValue(duckdb::dtime_tz_t(input.bits));
@@ -201,7 +198,7 @@ duckdb_value duckdb_create_time_ns(duckdb_time_ns input) {
 	return CAPICreateValue(duckdb::dtime_ns_t(input.nanos));
 }
 duckdb_time_ns duckdb_get_time_ns(duckdb_value val) {
-	return {CAPIGetValue<duckdb::dtime_ns_t, LogicalTypeId::TIME_NS>(val).value};
+	return {CAPIGetValue<duckdb::dtime_ns_t, LogicalTypeId::TIME_NS>(val).micros};
 }
 
 duckdb_value duckdb_create_timestamp(duckdb_timestamp input) {
@@ -226,18 +223,6 @@ duckdb_timestamp duckdb_get_timestamp_tz(duckdb_value val) {
 		return {0};
 	}
 	return {CAPIGetValue<duckdb::timestamp_tz_t, LogicalTypeId::TIMESTAMP_TZ>(val).value};
-}
-
-duckdb_value duckdb_create_timestamp_tz_ns(duckdb_timestamp_ns input) {
-	duckdb::timestamp_tz_ns_t ts(input.nanos);
-	return CAPICreateValue(ts);
-}
-
-duckdb_timestamp_ns duckdb_get_timestamp_tz_ns(duckdb_value val) {
-	if (!val) {
-		return {0};
-	}
-	return {CAPIGetValue<duckdb::timestamp_tz_ns_t, LogicalTypeId::TIMESTAMP_TZ_NS>(val).value};
 }
 
 duckdb_value duckdb_create_timestamp_s(duckdb_timestamp_s input) {
@@ -291,9 +276,6 @@ duckdb_blob duckdb_get_blob(duckdb_value val) {
 	auto &str = duckdb::StringValue::Get(res);
 
 	auto result = reinterpret_cast<void *>(malloc(sizeof(char) * str.size()));
-	if (!result) {
-		return {nullptr, 0};
-	}
 	memcpy(result, str.c_str(), str.size());
 	return {result, str.size()};
 }
@@ -305,9 +287,6 @@ duckdb_bit duckdb_get_bit(duckdb_value val) {
 	auto &str = duckdb::StringValue::Get(v);
 	auto size = str.size();
 	auto data = reinterpret_cast<uint8_t *>(malloc(size));
-	if (!data) {
-		return {nullptr, 0};
-	}
 	memcpy(data, str.c_str(), size);
 	return {data, size};
 }
@@ -333,9 +312,6 @@ char *duckdb_get_varchar(duckdb_value value) {
 	auto &str = duckdb::StringValue::Get(str_val);
 
 	auto result = reinterpret_cast<char *>(malloc(sizeof(char) * (str.size() + 1)));
-	if (!result) {
-		return nullptr;
-	}
 	memcpy(result, str.c_str(), str.size());
 	result[str.size()] = '\0';
 	return result;
@@ -345,7 +321,7 @@ duckdb_value duckdb_create_struct_value(duckdb_logical_type type, duckdb_value *
 		return nullptr;
 	}
 	const auto &logical_type = UnwrapType(type);
-	if (!duckdb::StructType::IsStruct(logical_type)) {
+	if (logical_type.id() != duckdb::LogicalTypeId::STRUCT) {
 		return nullptr;
 	}
 	if (duckdb::TypeVisitor::Contains(logical_type, duckdb::LogicalTypeId::INVALID) ||
@@ -630,7 +606,7 @@ duckdb_value duckdb_get_struct_child(duckdb_value value, idx_t index) {
 	}
 
 	auto val = UnwrapValue(value);
-	if (!duckdb::StructType::IsStruct(val.type()) || val.IsNull()) {
+	if (val.type().id() != LogicalTypeId::STRUCT || val.IsNull()) {
 		return nullptr;
 	}
 
@@ -651,9 +627,6 @@ char *duckdb_value_to_string(duckdb_value val) {
 	auto str = v.ToSQLString();
 
 	auto result = reinterpret_cast<char *>(malloc(sizeof(char) * (str.size() + 1)));
-	if (!result) {
-		return nullptr;
-	}
 	memcpy(result, str.c_str(), str.size());
 	result[str.size()] = '\0';
 	return result;

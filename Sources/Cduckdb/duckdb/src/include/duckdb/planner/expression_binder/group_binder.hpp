@@ -12,7 +12,6 @@
 #include "duckdb/planner/expression_binder.hpp"
 
 namespace duckdb {
-class BoundSelectNode;
 class ConstantExpression;
 class ColumnRefExpression;
 struct SelectBindState;
@@ -20,26 +19,32 @@ struct SelectBindState;
 //! The GROUP binder is responsible for binding expressions in the GROUP BY clause
 class GroupBinder : public ExpressionBinder {
 public:
-	GroupBinder(Binder &binder, ClientContext &context, BoundSelectNode &node, SelectBindState &bind_state);
+	GroupBinder(Binder &binder, ClientContext &context, SelectNode &node, idx_t group_index,
+	            SelectBindState &bind_state, case_insensitive_map_t<idx_t> &group_alias_map);
 
-public:
-	static void ReplaceSelectRef(SelectNode &node, SelectBindState &bind_state, ProjectionIndex index,
-	                             unique_ptr<ParsedExpression> &expr_ptr);
+	//! The unbound root expression
+	unique_ptr<ParsedExpression> unbound_expression;
+	//! The group index currently being bound
+	idx_t bind_index;
 
 protected:
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) override;
-	BindResult BindUnnest(FunctionExpression &function, idx_t depth, bool root_expression) override;
-	void ThrowIfUnnestInLambda(const ColumnBinding &column_binding) override;
 
 	string UnsupportedAggregateMessage() override;
+
+	BindResult BindSelectRef(idx_t entry);
+	BindResult BindColumnRef(ColumnRefExpression &expr, unique_ptr<ParsedExpression> &expr_ptr);
+	BindResult BindConstant(ConstantExpression &expr);
 
 	bool TryResolveAliasReference(ColumnRefExpression &colref, idx_t depth, bool root_expression, BindResult &result,
 	                              unique_ptr<ParsedExpression> &expr_ptr) override;
 
-private:
-	BoundSelectNode &node;
+	SelectNode &node;
 	SelectBindState &bind_state;
-	idx_t unnest_level = 0;
+	case_insensitive_map_t<idx_t> &group_alias_map;
+	unordered_set<idx_t> used_aliases;
+
+	idx_t group_index;
 };
 
 } // namespace duckdb

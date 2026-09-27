@@ -1,53 +1,20 @@
 #include "duckdb/storage/compression/dictionary/decompression.hpp"
-#include "duckdb/common/vector/dictionary_vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
 
 namespace duckdb {
 
-void CompressedStringScanState::ValidateDictionaryIndex(sel_t index) {
-	if (index >= index_buffer_count) {
-		throw IOException("Failed to scan dictionary string - dictionary index was out of range. Database file appears "
-		                  "to be corrupted.");
-	}
-}
-
-void CompressedStringScanState::ValidateDictionaryOffset(uint32_t dict_offset) {
-	if (dict_offset > dict.size) {
-		throw IOException(
-		    "Failed to scan dictionary string - dictionary offset was out of range. Database file appears "
-		    "to be corrupted.");
-	}
-}
-
 uint16_t CompressedStringScanState::GetStringLength(sel_t index) {
-	ValidateDictionaryIndex(index);
 	if (index == 0) {
 		return 0;
 	} else {
-		auto dict_offset = index_buffer_ptr[index];
-		auto previous_dict_offset = index_buffer_ptr[index - 1];
-		ValidateDictionaryOffset(dict_offset);
-		ValidateDictionaryOffset(previous_dict_offset);
-		if (dict_offset < previous_dict_offset) {
-			throw IOException("Failed to scan dictionary string - dictionary offset was out of range. Database file "
-			                  "appears to be corrupted.");
-		}
-		auto string_length = dict_offset - previous_dict_offset;
-		if (string_length > NumericLimits<uint16_t>::Maximum()) {
-			throw IOException("Failed to scan dictionary string - dictionary offset was out of range. Database file "
-			                  "appears to be corrupted.");
-		}
-		return UnsafeNumericCast<uint16_t>(string_length);
+		return UnsafeNumericCast<uint16_t>(index_buffer_ptr[index] - index_buffer_ptr[index - 1]);
 	}
 }
 
 string_t CompressedStringScanState::FetchStringFromDict(int32_t dict_offset, uint16_t string_len) {
-	if (dict_offset < 0) {
+	if (dict_offset < 0 || NumericCast<idx_t>(dict_offset) > dict.end || string_len > dict_offset) {
 		throw IOException(
-		    "Failed to scan dictionary string - dictionary offset was out of range. Database file appears "
-		    "to be corrupted.");
+		    "Failed to scan dictionary string - offset out of range. Database file appears to be corrupted.");
 	}
-	ValidateDictionaryOffset(UnsafeNumericCast<uint32_t>(dict_offset));
 	if (dict_offset == 0) {
 		return string_t(nullptr, 0);
 	}
@@ -61,68 +28,47 @@ string_t CompressedStringScanState::FetchStringFromDict(int32_t dict_offset, uin
 }
 
 void CompressedStringScanState::Initialize(ColumnSegment &segment, bool initialize_dictionary) {
-	block_size = segment.GetBlockSize();
-	auto block_offset = segment.GetBlockOffset();
-	if (block_offset > block_size || DictionaryCompression::DICTIONARY_HEADER_SIZE > block_size - block_offset) {
-		throw IOException(
-		    "Failed to scan dictionary string - dictionary was out of range. Database file appears to be corrupted.");
-	}
-	auto segment_capacity = block_size - block_offset;
-	baseptr = handle->GetDataMutable() + block_offset;
+	baseptr = handle->Ptr() + segment.GetBlockOffset();
 
 	// Load header values
 	auto header_ptr = reinterpret_cast<dictionary_compression_header_t *>(baseptr);
 	auto index_buffer_offset = Load<uint32_t>(data_ptr_cast(&header_ptr->index_buffer_offset));
 	index_buffer_count = Load<uint32_t>(data_ptr_cast(&header_ptr->index_buffer_count));
-	auto stored_width = Load<uint32_t>(data_ptr_cast(&header_ptr->bitpacking_width));
-	if (index_buffer_count == 0) {
-		throw IOException(
-		    "Failed to scan dictionary string - dictionary was out of range. Database file appears to be corrupted.");
-	}
-	auto expected_width = BitpackingPrimitives::MinimumBitWidth(index_buffer_count - 1);
-	if (stored_width != expected_width) {
-		throw IOException(
-		    "Failed to scan dictionary string - bitpacking width was invalid. Database file appears to be "
-		    "corrupted.");
-	}
-	current_width = expected_width;
-	auto selection_buffer_size = BitpackingPrimitives::GetRequiredSize(segment.count.load(), current_width);
-	auto expected_index_buffer_offset = DictionaryCompression::DICTIONARY_HEADER_SIZE + selection_buffer_size;
-	if (index_buffer_offset != expected_index_buffer_offset) {
-		throw IOException("Failed to scan dictionary string - selection buffer was out of range. Database file appears "
-		                  "to be corrupted.");
-	}
-	if (index_buffer_offset > segment_capacity ||
-	    index_buffer_count > (segment_capacity - index_buffer_offset) / sizeof(uint32_t)) {
+	current_width = (bitpacking_width_t)(Load<uint32_t>(data_ptr_cast(&header_ptr->bitpacking_width)));
+	if (segment.GetBlockOffset() + index_buffer_offset + sizeof(uint32_t) * index_buffer_count >
+	    segment.GetBlockSize()) {
 		throw IOException(
 		    "Failed to scan dictionary string - index was out of range. Database file appears to be corrupted.");
 	}
 	index_buffer_ptr = reinterpret_cast<uint32_t *>(baseptr + index_buffer_offset);
 	base_data = data_ptr_cast(baseptr + DictionaryCompression::DICTIONARY_HEADER_SIZE);
 
+	block_size = segment.GetBlockSize();
+
 	dict = DictionaryCompression::GetDictionary(segment, *handle);
-	auto index_buffer_end = index_buffer_offset + sizeof(uint32_t) * index_buffer_count;
-	if (dict.end > segment_capacity || dict.size > dict.end || dict.end - dict.size < index_buffer_end) {
+	if (segment.GetBlockOffset() + dict.end > block_size) {
 		throw IOException(
-		    "Failed to scan dictionary string - dictionary was out of range. Database file appears to be corrupted.");
+		    "Failed to scan dictionary string - dictionary end out of range. Database file appears to be corrupted.");
 	}
 	if (!initialize_dictionary) {
 		// Used by fetch, as fetch will never produce a DictionaryVector
 		return;
 	}
 
-	dictionary = DictionaryVector::CreateReusableDictionary(segment.GetType(), index_buffer_count);
+	dictionary = DictionaryVector::CreateReusableDictionary(segment.type, index_buffer_count);
 	dictionary_size = index_buffer_count;
-	auto dict_child_data = FlatVector::Writer<string_t>(dictionary->data, index_buffer_count);
-	dict_child_data.WriteNull();
+	auto dict_child_data = FlatVector::GetData<string_t>(dictionary->data);
+	FlatVector::SetNull(dictionary->data, 0, true);
 	for (uint32_t i = 1; i < index_buffer_count; i++) {
 		// NOTE: the passing of dict_child_vector, will not be used, its for big strings
 		uint16_t str_len = GetStringLength(i);
-		dict_child_data.WriteStringRef(FetchStringFromDict(UnsafeNumericCast<int32_t>(index_buffer_ptr[i]), str_len));
+		dict_child_data[i] = FetchStringFromDict(UnsafeNumericCast<int32_t>(index_buffer_ptr[i]), str_len);
 	}
 }
 
 void CompressedStringScanState::ScanToFlatVector(Vector &result, idx_t result_offset, idx_t start, idx_t scan_count) {
+	auto result_data = FlatVector::GetData<string_t>(result);
+
 	// Handling non-bitpacking-group-aligned start values;
 	idx_t start_offset = start % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
 
@@ -140,14 +86,12 @@ void CompressedStringScanState::ScanToFlatVector(Vector &result, idx_t result_of
 
 	BitpackingPrimitives::UnPackBuffer<sel_t>(data_ptr_cast(sel_vec_ptr), src, decompress_count, current_width);
 
-	auto result_data = FlatVector::Writer<string_t>(result, scan_count, result_offset);
 	for (idx_t i = 0; i < scan_count; i++) {
 		// Lookup dict offset in index buffer
 		auto string_number = sel_vec->get_index(i + start_offset);
-		ValidateDictionaryIndex(string_number);
 		auto dict_offset = index_buffer_ptr[string_number];
 		auto str_len = GetStringLength(UnsafeNumericCast<sel_t>(string_number));
-		result_data.WriteStringRef(FetchStringFromDict(UnsafeNumericCast<int32_t>(dict_offset), str_len));
+		result_data[result_offset + i] = FetchStringFromDict(UnsafeNumericCast<int32_t>(dict_offset), str_len);
 	}
 }
 
@@ -176,11 +120,8 @@ void CompressedStringScanState::ScanToDictionaryVector(ColumnSegment &segment, V
 			sel_vec->set_index(i, sel_vec->get_index(i + start_offset));
 		}
 	}
-	for (idx_t i = 0; i < scan_count; i++) {
-		ValidateDictionaryIndex(sel_vec->get_index(i));
-	}
 
-	result.Dictionary(dictionary, *sel_vec, scan_count);
+	result.Dictionary(dictionary, *sel_vec);
 }
 
 } // namespace duckdb

@@ -11,7 +11,6 @@
 #include "duckdb/storage/compression/alprd/algorithm/alprd.hpp"
 #include "duckdb/storage/compression/alprd/alprd_constants.hpp"
 
-#include "duckdb/common/exception.hpp"
 #include "duckdb/function/compression_function.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
@@ -68,12 +67,12 @@ public:
 	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
 
 	explicit AlpRDScanState(ColumnSegment &segment) : segment(segment), count(segment.count) {
-		auto &buffer_manager = BufferManager::GetBufferManager(segment.GetDatabase());
+		auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
 
-		handle = buffer_manager.Pin(segment.GetBlockHandle());
+		handle = buffer_manager.Pin(segment.block);
 		// ScanStates never exceed the boundaries of a Segment,
 		// but are not guaranteed to start at the beginning of the Block
-		segment_data = handle.GetDataMutable() + segment.GetBlockOffset();
+		segment_data = handle.Ptr() + segment.GetBlockOffset();
 		const auto block_size = segment.GetBlockSize();
 
 		idx_t total_segment_offset = segment.GetBlockOffset();
@@ -244,6 +243,14 @@ public:
 			memcpy(vector_state.exceptions_positions, (void *)vector_ptr, exceptions_positions_copy_size);
 			vector_ptr += exceptions_positions_copy_size;
 			read_bytes += exceptions_positions_copy_size;
+
+			//! The exception positions index into the decoded vector, so they must stay within its bounds
+			for (idx_t i = 0; i < vector_state.exceptions_count; i++) {
+				if (vector_state.exceptions_positions[i] >= vector_size) {
+					throw IOException("Corrupted ALPRD segment: exception position (%d) exceeds vector_size (%d)",
+					                  vector_state.exceptions_positions[i], vector_size);
+				}
+			}
 		}
 
 		// Decode all the vector values to the specified 'value_buffer'
@@ -292,7 +299,7 @@ void AlpRDScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t scan
 	auto &scan_state = (AlpRDScanState<T> &)*state.scan_state;
 
 	// Get the pointer to the result values
-	auto current_result_ptr = FlatVector::GetDataMutableUnsafe<EXACT_TYPE>(result);
+	auto current_result_ptr = FlatVector::GetDataUnsafe<EXACT_TYPE>(result);
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	current_result_ptr += result_offset;
 

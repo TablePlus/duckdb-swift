@@ -82,7 +82,7 @@ BoundStatement QueryRelation::Bind(Binder &binder) {
 			select->node = std::move(select_node);
 
 			auto cte_info = make_uniq<CommonTableExpressionInfo>();
-			cte_info->query_node = std::move(select->node);
+			cte_info->query = std::move(select);
 
 			auto subquery = make_uniq<SubqueryRef>(std::move(select_stmt), "query_relation");
 			auto top_level_select = make_uniq<SelectStatement>();
@@ -100,8 +100,8 @@ BoundStatement QueryRelation::Bind(Binder &binder) {
 	return result;
 }
 
-Identifier QueryRelation::GetAlias() {
-	return Identifier(alias);
+string QueryRelation::GetAlias() {
+	return alias;
 }
 
 const vector<ColumnDefinition> &QueryRelation::Columns() {

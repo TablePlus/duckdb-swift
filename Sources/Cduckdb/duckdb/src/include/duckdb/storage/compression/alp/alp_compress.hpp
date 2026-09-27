@@ -12,7 +12,6 @@
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/types/null_value.hpp"
 #include "duckdb/function/compression_function.hpp"
-#include "duckdb/storage/compression/standard_compression_state.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/compression/alp/algorithm/alp.hpp"
@@ -20,24 +19,28 @@
 #include "duckdb/storage/compression/patas/patas.hpp"
 #include "duckdb/storage/table/column_data_checkpointer.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
-#include "duckdb/storage/statistics/stats_writer.hpp"
 
 namespace duckdb {
 
 template <class T>
-struct AlpCompressionState : public StandardCompressionState {
+struct AlpCompressionState : public CompressionState {
 public:
 	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
 
 	AlpCompressionState(ColumnDataCheckpointData &checkpoint_data, AlpAnalyzeState<T> *analyze_state)
-	    : StandardCompressionState(checkpoint_data, CompressionType::COMPRESSION_ALP) {
+	    : CompressionState(analyze_state->info), checkpoint_data(checkpoint_data),
+	      function(checkpoint_data.GetCompressionFunction(CompressionType::COMPRESSION_ALP)) {
 		CreateEmptySegment();
 
 		//! Combinations found on the analyze step are needed for compression
 		compression_data.best_k_combinations = analyze_state->compression_data.best_k_combinations;
 	}
 
-	StatsWriter<T> stats_writer;
+	ColumnDataCheckpointData &checkpoint_data;
+	const CompressionFunction &function;
+	unique_ptr<ColumnSegment> current_segment;
+	BufferHandle handle;
+
 	idx_t vector_idx = 0;
 	idx_t nulls_idx = 0;
 	idx_t vectors_flushed = 0;
@@ -61,7 +64,7 @@ public:
 	bool HasEnoughSpace(idx_t vector_size) {
 		//! If [start of block + used space + required space] is more than whats left (current position
 		//! of metadata pointer - the size of a new metadata pointer)
-		if ((handle.GetDataMutable() + AlignValue(UsedSpace() + vector_size)) >=
+		if ((handle.Ptr() + AlignValue(UsedSpace() + vector_size)) >=
 		    (metadata_ptr - AlpConstants::METADATA_POINTER_SIZE)) {
 			return false;
 		}
@@ -73,12 +76,20 @@ public:
 	}
 
 	void CreateEmptySegment() {
-		CreateAndPinNewSegment();
+		auto &db = checkpoint_data.GetDatabase();
+		auto &type = checkpoint_data.GetType();
+
+		auto compressed_segment =
+		    ColumnSegment::CreateTransientSegment(db, function, type, info.GetBlockSize(), info.GetBlockManager());
+		current_segment = std::move(compressed_segment);
+
+		auto &buffer_manager = BufferManager::GetBufferManager(current_segment->db);
+		handle = buffer_manager.Pin(current_segment->block);
 
 		// The pointer to the start of the compressed data.
-		data_ptr = handle.GetDataMutable() + current_segment->GetBlockOffset() + AlpConstants::HEADER_SIZE;
+		data_ptr = handle.Ptr() + current_segment->GetBlockOffset() + AlpConstants::HEADER_SIZE;
 		// The pointer to the start of the metadata.
-		metadata_ptr = handle.GetDataMutable() + current_segment->GetBlockOffset() + info.GetBlockSize();
+		metadata_ptr = handle.Ptr() + current_segment->GetBlockOffset() + info.GetBlockSize();
 		next_vector_byte_index_start = AlpConstants::HEADER_SIZE;
 	}
 
@@ -92,8 +103,7 @@ public:
 		const idx_t compressed_size = compression_data.RequiredSpace();
 
 		const auto storage_version = checkpoint_data.GetStorageManager().GetStorageVersion();
-		const bool should_compress = compressed_size < uncompressed_size ||
-		                             StorageManager::IsPriorToVersion(StorageVersion::V1_5_0, storage_version);
+		const bool should_compress = compressed_size < uncompressed_size || storage_version < 7;
 
 		const idx_t vector_size = should_compress ? compressed_size : uncompressed_size;
 
@@ -104,12 +114,12 @@ public:
 		}
 
 		if (nulls_idx) {
-			stats_writer.SetHasNull();
+			current_segment->stats.statistics.SetHasNullFast();
 		}
 		if (vector_idx != nulls_idx) { //! At least there is one valid value in the vector
-			stats_writer.SetHasValid();
+			current_segment->stats.statistics.SetHasNoNullFast();
 			for (idx_t i = 0; i < vector_idx; i++) {
-				stats_writer.UpdateMinMax(input_vector[i]);
+				current_segment->stats.statistics.UpdateNumericStats<T>(input_vector[i]);
 			}
 		}
 		current_segment->count += vector_idx;
@@ -195,7 +205,8 @@ public:
 	}
 
 	void FlushSegment() {
-		auto dataptr = handle.GetDataMutable();
+		auto &checkpoint_state = checkpoint_data.GetCheckpointState();
+		auto dataptr = handle.Ptr();
 
 		idx_t metadata_offset = AlignValue(UsedSpace());
 
@@ -227,7 +238,7 @@ public:
 		// Store the offset to the end of metadata (to be used as a backwards pointer in decoding)
 		Store<uint32_t>(NumericCast<uint32_t>(total_segment_size), dataptr);
 
-		FlushCurrentSegment(stats_writer, total_segment_size);
+		checkpoint_state.FlushSegment(std::move(current_segment), std::move(handle), total_segment_size);
 		data_bytes_used = 0;
 		vectors_flushed = 0;
 	}
@@ -251,7 +262,7 @@ public:
 			// to avoid checking if input_vector is filled in each iteration
 			auto values_to_fill_alp_input =
 			    MinValue<idx_t>(AlpConstants::ALP_VECTOR_SIZE - vector_idx, values_left_in_data);
-			if (vdata.validity.CannotHaveNull()) { //! We optimize a loop when there are no null
+			if (vdata.validity.AllValid()) { //! We optimize a loop when there are no null
 				for (idx_t i = 0; i < values_to_fill_alp_input; i++) {
 					auto idx = vdata.sel->get_index(offset_in_data + i);
 					T value = data[idx];
@@ -287,11 +298,11 @@ unique_ptr<CompressionState> AlpInitCompression(ColumnDataCheckpointData &checkp
 }
 
 template <class T>
-void AlpCompress(CompressionState &state_p, const Vector &scan_vector) {
+void AlpCompress(CompressionState &state_p, Vector &scan_vector, idx_t count) {
 	auto &state = (AlpCompressionState<T> &)state_p;
 	UnifiedVectorFormat vdata;
-	scan_vector.ToUnifiedFormat(vdata);
-	state.Append(vdata, scan_vector.size());
+	scan_vector.ToUnifiedFormat(count, vdata);
+	state.Append(vdata, count);
 }
 
 template <class T>

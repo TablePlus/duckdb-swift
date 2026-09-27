@@ -8,55 +8,63 @@ namespace duckdb {
 BindingAlias::BindingAlias() {
 }
 
-BindingAlias::BindingAlias(Identifier alias_p) : qualified_name(std::move(alias_p)) {
+BindingAlias::BindingAlias(string alias_p) : alias(std::move(alias_p)) {
 }
 
-BindingAlias::BindingAlias(Identifier schema_p, Identifier alias_p)
-    : qualified_name(Identifier(), std::move(schema_p), std::move(alias_p)) {
+BindingAlias::BindingAlias(string schema_p, string alias_p) : schema(std::move(schema_p)), alias(std::move(alias_p)) {
 }
 
 BindingAlias::BindingAlias(const StandardEntry &entry)
-    : qualified_name(entry.ParentCatalog().GetName(), entry.schema.name, entry.name) {
+    : catalog(entry.ParentCatalog().GetName()), schema(entry.schema.name), alias(entry.name) {
 }
 
-BindingAlias::BindingAlias(Identifier catalog_p, Identifier schema_p, Identifier alias_p)
-    : qualified_name(std::move(catalog_p), std::move(schema_p), std::move(alias_p)) {
+BindingAlias::BindingAlias(string catalog_p, string schema_p, string alias_p)
+    : catalog(std::move(catalog_p)), schema(std::move(schema_p)), alias(std::move(alias_p)) {
 }
 
 bool BindingAlias::IsSet() const {
-	return !qualified_name.Name().empty();
+	return !alias.empty();
 }
 
-const Identifier &BindingAlias::GetAlias() const {
+const string &BindingAlias::GetAlias() const {
 	if (!IsSet()) {
 		throw InternalException("Calling BindingAlias::GetAlias on a non-set alias");
 	}
-	return qualified_name.Name();
+	return alias;
 }
 
 string BindingAlias::ToString() const {
-	return qualified_name.ToString();
+	string result;
+	if (!catalog.empty()) {
+		result += KeywordHelper::WriteOptionallyQuoted(catalog) + ".";
+	}
+	if (!schema.empty()) {
+		result += KeywordHelper::WriteOptionallyQuoted(schema) + ".";
+	}
+	result += KeywordHelper::WriteOptionallyQuoted(alias);
+	return result;
 }
 
 bool BindingAlias::Matches(const BindingAlias &other) const {
 	// we match based on the specificity of the other entry
 	// i.e. "tbl" matches "catalog.schema.tbl"
 	// but "schema2.tbl" does not match "schema.tbl"
-	if (!other.GetCatalog().empty()) {
-		if (GetCatalog() != other.GetCatalog()) {
+	if (!other.catalog.empty()) {
+		if (!StringUtil::CIEquals(catalog, other.catalog)) {
 			return false;
 		}
 	}
-	if (!other.GetSchema().empty()) {
-		if (GetSchema() != other.GetSchema()) {
+	if (!other.schema.empty()) {
+		if (!StringUtil::CIEquals(schema, other.schema)) {
 			return false;
 		}
 	}
-	return qualified_name.Name() == other.qualified_name.Name();
+	return StringUtil::CIEquals(alias, other.alias);
 }
 
 bool BindingAlias::operator==(const BindingAlias &other) const {
-	return qualified_name == other.qualified_name;
+	return StringUtil::CIEquals(catalog, other.catalog) && StringUtil::CIEquals(schema, other.schema) &&
+	       StringUtil::CIEquals(alias, other.alias);
 }
 
 } // namespace duckdb

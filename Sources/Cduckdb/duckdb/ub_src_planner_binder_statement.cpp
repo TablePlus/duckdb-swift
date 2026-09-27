@@ -1,14 +1,8 @@
-#line 0 "src/planner/binder/statement/bind_alter.cpp"
-#include "src/planner/binder/statement/bind_alter.cpp"
-
 #line 0 "src/planner/binder/statement/bind_attach.cpp"
 #include "src/planner/binder/statement/bind_attach.cpp"
 
 #line 0 "src/planner/binder/statement/bind_call.cpp"
 #include "src/planner/binder/statement/bind_call.cpp"
-
-#line 0 "src/planner/binder/statement/bind_connect.cpp"
-#include "src/planner/binder/statement/bind_connect.cpp"
 
 #line 0 "src/planner/binder/statement/bind_copy.cpp"
 #include "src/planner/binder/statement/bind_copy.cpp"
@@ -70,11 +64,11 @@
 #line 0 "src/planner/binder/statement/bind_set.cpp"
 #include "src/planner/binder/statement/bind_set.cpp"
 
+#line 0 "src/planner/binder/statement/bind_simple.cpp"
+#include "src/planner/binder/statement/bind_simple.cpp"
+
 #line 0 "src/planner/binder/statement/bind_summarize.cpp"
 #include "src/planner/binder/statement/bind_summarize.cpp"
-
-#line 0 "src/planner/binder/statement/bind_transaction.cpp"
-#include "src/planner/binder/statement/bind_transaction.cpp"
 
 #line 0 "src/planner/binder/statement/bind_update.cpp"
 #include "src/planner/binder/statement/bind_update.cpp"

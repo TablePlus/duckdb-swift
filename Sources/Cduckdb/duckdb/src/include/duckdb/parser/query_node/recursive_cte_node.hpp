@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/parser/query_node.hpp"
 
@@ -22,14 +21,14 @@ public:
 	RecursiveCTENode() : QueryNode(QueryNodeType::RECURSIVE_CTE_NODE) {
 	}
 
-	Identifier ctename;
+	string ctename;
 	bool union_all;
 	//! The left side of the set operation
 	unique_ptr<QueryNode> left;
 	//! The right side of the set operation
 	unique_ptr<QueryNode> right;
 	//! Aliases of the recursive CTE node
-	vector<Identifier> aliases;
+	vector<string> aliases;
 	//! targets for key variants
 	vector<unique_ptr<ParsedExpression>> key_targets;
 

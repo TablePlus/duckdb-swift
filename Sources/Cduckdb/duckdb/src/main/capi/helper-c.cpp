@@ -73,8 +73,6 @@ LogicalTypeId LogicalTypeIdFromC(const duckdb_type type) {
 		return LogicalTypeId::TIME_TZ;
 	case DUCKDB_TYPE_TIMESTAMP_TZ:
 		return LogicalTypeId::TIMESTAMP_TZ;
-	case DUCKDB_TYPE_TIMESTAMP_TZ_NS:
-		return LogicalTypeId::TIMESTAMP_TZ_NS;
 	case DUCKDB_TYPE_ANY:
 		return LogicalTypeId::ANY;
 	case DUCKDB_TYPE_BIGNUM:
@@ -133,8 +131,6 @@ duckdb_type LogicalTypeIdToC(const LogicalTypeId type) {
 		return DUCKDB_TYPE_TIMESTAMP;
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return DUCKDB_TYPE_TIMESTAMP_TZ;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return DUCKDB_TYPE_TIMESTAMP_TZ_NS;
 	case LogicalTypeId::TIMESTAMP_SEC:
 		return DUCKDB_TYPE_TIMESTAMP_S;
 	case LogicalTypeId::TIMESTAMP_MS:
@@ -164,8 +160,6 @@ duckdb_type LogicalTypeIdToC(const LogicalTypeId type) {
 	case LogicalTypeId::LIST:
 		return DUCKDB_TYPE_LIST;
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
-		// TUPLE is an unnamed struct - reported as DUCKDB_TYPE_STRUCT over the C-API (child names are empty)
 		return DUCKDB_TYPE_STRUCT;
 	case LogicalTypeId::MAP:
 		return DUCKDB_TYPE_MAP;
@@ -204,7 +198,6 @@ idx_t GetCTypeSize(const duckdb_type type) {
 	case DUCKDB_TYPE_SMALLINT:
 		return sizeof(int16_t);
 	case DUCKDB_TYPE_INTEGER:
-	case DUCKDB_TYPE_SQLNULL:
 		return sizeof(int32_t);
 	case DUCKDB_TYPE_BIGINT:
 		return sizeof(int64_t);
@@ -235,7 +228,6 @@ idx_t GetCTypeSize(const duckdb_type type) {
 	case DUCKDB_TYPE_TIMESTAMP_S:
 	case DUCKDB_TYPE_TIMESTAMP_MS:
 	case DUCKDB_TYPE_TIMESTAMP_NS:
-	case DUCKDB_TYPE_TIMESTAMP_TZ_NS:
 		return sizeof(duckdb_timestamp);
 	case DUCKDB_TYPE_VARCHAR:
 		return sizeof(const char *);
@@ -310,6 +302,12 @@ duckdb_statement_type StatementTypeToC(const StatementType type) {
 		return DUCKDB_STATEMENT_TYPE_DETACH;
 	case StatementType::MULTI_STATEMENT:
 		return DUCKDB_STATEMENT_TYPE_MULTI;
+	case StatementType::COPY_DATABASE_STATEMENT:
+		return DUCKDB_STATEMENT_TYPE_COPY_DATABASE;
+	case StatementType::UPDATE_EXTENSIONS_STATEMENT:
+		return DUCKDB_STATEMENT_TYPE_UPDATE_EXTENSIONS;
+	case StatementType::MERGE_INTO_STATEMENT:
+		return DUCKDB_STATEMENT_TYPE_MERGE_INTO;
 	default:
 		return DUCKDB_STATEMENT_TYPE_INVALID;
 	}

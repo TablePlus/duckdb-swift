@@ -1,18 +1,9 @@
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// duckdb/common/types/variant.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
 #pragma once
 
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/string_type.hpp"
-#include "duckdb/storage/storage_info.hpp"
 
 namespace duckdb_yyjson {
 struct yyjson_mut_doc;
@@ -30,7 +21,7 @@ enum class VariantChildLookupMode : uint8_t { INVALID, BY_KEY, BY_INDEX };
 
 struct Variant {
 public:
-	static constexpr StorageVersion VERSION_ADDED = StorageVersion::V1_5_0; // Added to core in DuckDB v1.5.0
+	static constexpr idx_t VERSION_ADDED = 7; // Added to core in DuckDB v1.5.0
 };
 
 struct VariantPathComponent {
@@ -40,23 +31,6 @@ public:
 	explicit VariantPathComponent(const string &key) : lookup_mode(VariantChildLookupMode::BY_KEY), key(key) {
 	}
 	explicit VariantPathComponent(uint32_t index) : lookup_mode(VariantChildLookupMode::BY_INDEX), index(index) {
-	}
-
-	bool operator==(const VariantPathComponent &other) const {
-		if (lookup_mode != other.lookup_mode) {
-			return false;
-		}
-		switch (lookup_mode) {
-		case VariantChildLookupMode::BY_KEY:
-			return key == other.key;
-		case VariantChildLookupMode::BY_INDEX:
-			return index == other.index;
-		default:
-			return false;
-		}
-	}
-	bool operator!=(const VariantPathComponent &other) const {
-		return !(*this == other);
 	}
 
 public:
@@ -70,16 +44,6 @@ struct VariantNestedData {
 	uint32_t child_count;
 	//! Index of the first child
 	uint32_t children_idx;
-};
-
-//! The (width, scale) of a DECIMAL value - the physical storage type (and hence the payload) follows
-//! from the width (see VariantDecimalData::GetPhysicalType)
-struct VariantDecimalProperties {
-	VariantDecimalProperties(uint32_t width, uint32_t scale) : width(width), scale(scale) {
-	}
-
-	uint32_t width;
-	uint32_t scale;
 };
 
 struct VariantDecimalData {
@@ -159,7 +123,6 @@ enum class VariantLogicalType : uint8_t {
 	BIGNUM = 31,
 	BITSTRING = 32,
 	GEOMETRY = 33,
-	TIMESTAMP_NANOS_TZ = 34,
 	ENUM_SIZE /* always kept as last item of the enum */
 };
 
@@ -173,14 +136,13 @@ public:
 	list_entry_t GetChildrenListEntry(idx_t row) const;
 	list_entry_t GetValuesListEntry(idx_t row) const;
 	const string_t &GetKey(idx_t row, idx_t index) const;
-	idx_t GetKeysCount(idx_t row) const;
 	uint32_t GetKeysIndex(idx_t row, idx_t child_index) const;
 	uint32_t GetValuesIndex(idx_t row, idx_t child_index) const;
 	VariantLogicalType GetTypeId(idx_t row, idx_t value_index) const;
 	uint32_t GetByteOffset(idx_t row, idx_t value_index) const;
 	const string_t &GetData(idx_t row) const;
 
-private:
+public:
 	const RecursiveUnifiedVectorFormat &variant;
 	const UnifiedVectorFormat &keys;
 	const UnifiedVectorFormat &keys_entry;
@@ -207,7 +169,7 @@ private:
 
 struct VariantCasts {
 	static duckdb_yyjson::yyjson_mut_val *ConvertVariantToJSON(duckdb_yyjson::yyjson_mut_doc *doc,
-	                                                           const UnifiedVariantVectorData &source, idx_t row,
+	                                                           const RecursiveUnifiedVectorFormat &source, idx_t row,
 	                                                           uint32_t values_idx);
 };
 

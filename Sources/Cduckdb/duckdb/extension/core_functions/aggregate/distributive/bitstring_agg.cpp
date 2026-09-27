@@ -49,13 +49,13 @@ struct BitstringAggBindData : public FunctionData {
 	}
 
 	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
-	                      const BoundAggregateFunction &) {
+	                      const AggregateFunction &) {
 		auto &bind_data = bind_data_p->Cast<BitstringAggBindData>();
 		serializer.WriteProperty(100, "min", bind_data.min);
 		serializer.WriteProperty(101, "max", bind_data.max);
 	}
 
-	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, BoundAggregateFunction &) {
+	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, AggregateFunction &) {
 		Value min;
 		Value max;
 		deserializer.ReadProperty(100, "min", min);
@@ -66,6 +66,11 @@ struct BitstringAggBindData : public FunctionData {
 
 struct BitStringAggOperation {
 	static constexpr const idx_t MAX_BIT_RANGE = 1000000000; // for now capped at 1 billion bits
+
+	template <class STATE>
+	static void Initialize(STATE &state) {
+		state.is_set = false;
+	}
 
 	template <class INPUT_TYPE, class STATE, class OP>
 	static void Operation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &unary_input) {
@@ -238,12 +243,14 @@ unique_ptr<BaseStatistics> BitstringPropagateStats(ClientContext &context, Bound
 	return nullptr;
 }
 
-unique_ptr<FunctionData> BindBitstringAgg(BindAggregateFunctionInput &input) {
-	auto &function = input.GetBoundFunction();
-	auto &arguments = input.GetArguments();
+unique_ptr<FunctionData> BindBitstringAgg(ClientContext &context, AggregateFunction &function,
+                                          vector<unique_ptr<Expression>> &arguments) {
 	if (arguments.size() == 3) {
-		auto min = input.GetConstant(1);
-		auto max = input.GetConstant(2);
+		if (!arguments[1]->IsFoldable() || !arguments[2]->IsFoldable()) {
+			throw BinderException("bitstring_agg requires a constant min and max argument");
+		}
+		auto min = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
+		auto max = ExpressionExecutor::EvaluateScalar(context, *arguments[2]);
 		Function::EraseArgument(function, arguments, 2);
 		Function::EraseArgument(function, arguments, 1);
 		return make_uniq<BitstringAggBindData>(min, max);
@@ -253,16 +260,16 @@ unique_ptr<FunctionData> BindBitstringAgg(BindAggregateFunctionInput &input) {
 
 template <class TYPE>
 void BindBitString(AggregateFunctionSet &bitstring_agg, const LogicalTypeId &type) {
-	auto function = AggregateFunction::UnaryAggregate<BitAggState<TYPE>, TYPE, string_t, BitStringAggOperation>(
-	    type, LogicalType::BIT);
+	auto function =
+	    AggregateFunction::UnaryAggregateDestructor<BitAggState<TYPE>, TYPE, string_t, BitStringAggOperation>(
+	        type, LogicalType::BIT);
 	function.SetBindCallback(BindBitstringAgg); // create new a 'BitstringAggBindData'
 	function.SetSerializeCallback(BitstringAggBindData::Serialize);
 	function.SetDeserializeCallback(BitstringAggBindData::Deserialize);
 	function.SetStatisticsCallback(
-	    BitstringPropagateStats); // stores min and max from column stats in BitstringAggBindData
-	function.GetSignature().GetParameter(0).SetName("arg");
+	    BitstringPropagateStats);        // stores min and max from column stats in BitstringAggBindData
 	bitstring_agg.AddFunction(function); // uses the BitstringAggBindData to access statistics for creating bitstring
-	function.GetSignature() = FunctionSignature({{"arg", type}, {"min", type}, {"max", type}}, LogicalType::BIT);
+	function.arguments = {type, type, type};
 	function.SetStatisticsCallback(nullptr); // min and max are provided as arguments
 	bitstring_agg.AddFunction(function);
 }

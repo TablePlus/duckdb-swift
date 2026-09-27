@@ -24,8 +24,8 @@ class ColumnDefinition;
 //! A column of a table.
 class ColumnDefinition {
 public:
-	DUCKDB_API ColumnDefinition(Identifier name, LogicalType type);
-	DUCKDB_API ColumnDefinition(Identifier name, LogicalType type, unique_ptr<ParsedExpression> expression,
+	DUCKDB_API ColumnDefinition(string name, LogicalType type);
+	DUCKDB_API ColumnDefinition(string name, LogicalType type, unique_ptr<ParsedExpression> expression,
 	                            TableColumnType category);
 
 public:
@@ -40,16 +40,12 @@ public:
 	void SetType(const LogicalType &type);
 
 	//! name
-	DUCKDB_API const Identifier &Name() const;
-	void SetName(const Identifier &name);
+	DUCKDB_API const string &Name() const;
+	void SetName(const string &name);
 
 	//! comment
 	DUCKDB_API const Value &Comment() const;
 	void SetComment(const Value &comment);
-
-	//! tags
-	DUCKDB_API const InsertionOrderPreservingMap<string> &Tags() const;
-	void SetTags(InsertionOrderPreservingMap<string> new_tags);
 
 	//! compression_type
 	const duckdb::CompressionType &CompressionType() const;
@@ -72,8 +68,6 @@ public:
 	bool Generated() const;
 	DUCKDB_API ColumnDefinition Copy() const;
 
-	string ToSQLString() const;
-
 	DUCKDB_API void Serialize(Serializer &serializer) const;
 	DUCKDB_API static ColumnDefinition Deserialize(Deserializer &deserializer);
 
@@ -87,13 +81,13 @@ public:
 	void ChangeGeneratedExpressionType(const LogicalType &type);
 	void GetListOfDependencies(vector<string> &dependencies) const;
 
-	Identifier GetName() const;
+	string GetName() const;
 
 	LogicalType GetType() const;
 
 private:
 	//! The name of the entry
-	Identifier name;
+	string name;
 	//! The type of the column
 	LogicalType type;
 	//! Compression Type used for this column
@@ -110,7 +104,7 @@ private:
 	//! Comment on this column
 	Value comment;
 	//! Tags on this column
-	InsertionOrderPreservingMap<string> tags;
+	unordered_map<string, string> tags;
 };
 
 } // namespace duckdb

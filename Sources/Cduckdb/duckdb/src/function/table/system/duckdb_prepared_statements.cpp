@@ -1,5 +1,4 @@
 #include "duckdb/function/table/system_functions.hpp"
-#include "duckdb/execution/physical_plan_generator.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -52,33 +51,27 @@ void DuckDBPreparedStatementsFunction(ClientContext &context, TableFunctionInput
 	// start returning values
 	// either fill up the chunk or return all the remaining columns
 	idx_t count = 0;
-
-	// name, VARCHAR
-	auto &name_vec = output.data[0];
-	// statement, VARCHAR
-	auto &statement_vec = output.data[1];
-	// parameter_types, VARCHAR[]
-	auto &parameter_types_vec = output.data[2];
-	// result_types, VARCHAR[]
-	auto &result_types_vec = output.data[3];
-
 	while (data.offset < data.entries.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &entry = data.entries[data.offset++];
 		auto &name = entry.first;
 		auto &prepared_statement = *entry.second;
 
-		name_vec.Append(Value(name));
-		statement_vec.Append(Value(prepared_statement.unbound_statement->ToString()));
+		// name, VARCHAR
+		output.SetValue(0, count, Value(name));
+		// statement, VARCHAR
+		output.SetValue(1, count, Value(prepared_statement.unbound_statement->ToString()));
+		// parameter_types, VARCHAR[]
 		auto &named_parameter_map = prepared_statement.unbound_statement->named_param_map;
 		if (named_parameter_map.empty()) {
-			parameter_types_vec.Append(Value(LogicalType::LIST(LogicalType::VARCHAR)));
+			output.SetValue(2, count, Value(LogicalType::LIST(LogicalType::VARCHAR)));
 		} else {
 			vector<Value> parameter_types;
 			for (idx_t i = 0; i < prepared_statement.properties.parameter_count; i++) {
 				parameter_types.push_back(LogicalType(LogicalTypeId::UNKNOWN).ToString());
 			}
-			parameter_types_vec.Append(Value::LIST(std::move(parameter_types)));
+			output.SetValue(2, count, Value::LIST(std::move(parameter_types)));
 		}
+		// result_types, VARCHAR[]
 		switch (prepared_statement.properties.return_type) {
 		case StatementReturnType::QUERY_RESULT: {
 			if (prepared_statement.physical_plan) {
@@ -87,24 +80,25 @@ void DuckDBPreparedStatementsFunction(ClientContext &context, TableFunctionInput
 				for (auto &type : plan_types) {
 					return_types.push_back(type.ToString());
 				}
-				result_types_vec.Append(Value::LIST(return_types));
+				output.SetValue(3, count, Value::LIST(return_types));
 			} else {
-				result_types_vec.Append(Value(LogicalType::LIST(LogicalType::VARCHAR)));
+				output.SetValue(3, count, Value(LogicalType::LIST(LogicalType::VARCHAR)));
 			}
 			break;
 		}
 		case StatementReturnType::CHANGED_ROWS: {
-			result_types_vec.Append(Value::LIST({"BIGINT"}));
+			output.SetValue(3, count, Value::LIST({"BIGINT"}));
 			break;
 		}
 		case StatementReturnType::NOTHING:
 		default: {
-			result_types_vec.Append(Value(LogicalType::LIST(LogicalType::VARCHAR)));
+			output.SetValue(3, count, Value(LogicalType::LIST(LogicalType::VARCHAR)));
 			break;
 		}
 		}
 		count++;
 	}
+	output.SetCardinality(count);
 }
 
 void DuckDBPreparedStatementsFun::RegisterFunction(BuiltinFunctions &set) {

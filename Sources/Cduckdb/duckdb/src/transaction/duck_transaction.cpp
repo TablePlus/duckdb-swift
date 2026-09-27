@@ -2,9 +2,6 @@
 #include "duckdb/transaction/commit_state.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/main/settings.hpp"
-#include "duckdb/main/valid_checker.hpp"
-#include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/column_definition.hpp"
@@ -19,7 +16,6 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/storage/table/column_data.hpp"
 #include "duckdb/main/client_data.hpp"
-#include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
@@ -71,7 +67,7 @@ void DuckTransaction::PushCatalogEntry(CatalogEntry &entry, data_ptr_t extra_dat
 	}
 
 	auto undo_entry = undo_buffer.CreateEntry(UndoFlags::CATALOG_ENTRY, alloc_size);
-	auto ptr = undo_entry.GetDataMutable();
+	auto ptr = undo_entry.Ptr();
 	// store the pointer to the catalog entry
 	Store<CatalogEntry *>(&entry, ptr);
 	if (extra_data_size > 0) {
@@ -87,13 +83,14 @@ void DuckTransaction::PushCatalogEntry(CatalogEntry &entry, data_ptr_t extra_dat
 
 void DuckTransaction::PushAttach(AttachedDatabase &db) {
 	auto undo_entry = undo_buffer.CreateEntry(UndoFlags::ATTACHED_DATABASE, sizeof(AttachedDatabase *));
-	auto ptr = undo_entry.GetDataMutable();
+	auto ptr = undo_entry.Ptr();
 	// store the pointer to the database
 	Store<CatalogEntry *>(&db, ptr);
 }
 
-void DuckTransaction::PushDelete(DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx, row_t rows[],
-                                 idx_t count, idx_t base_row) {
+void DuckTransaction::PushDelete(DataTable &table, RowVersionManager &info, idx_t vector_idx, row_t rows[], idx_t count,
+                                 idx_t base_row) {
+	ModifyTable(table);
 	bool is_consecutive = true;
 	// check if the rows are consecutive
 	for (idx_t i = 0; i < count; i++) {
@@ -109,10 +106,10 @@ void DuckTransaction::PushDelete(DuckTableEntry &table_entry, RowVersionManager 
 	}
 
 	auto undo_entry = undo_buffer.CreateEntry(UndoFlags::DELETE_TUPLE, alloc_size);
-	auto delete_info = reinterpret_cast<DeleteInfo *>(undo_entry.GetDataMutable());
+	auto delete_info = reinterpret_cast<DeleteInfo *>(undo_entry.Ptr());
 	delete_info->version_info = &info;
 	delete_info->vector_idx = vector_idx;
-	delete_info->table = &table_entry;
+	delete_info->table = &table;
 	delete_info->count = count;
 	delete_info->base_row = base_row;
 	delete_info->is_consecutive = is_consecutive;
@@ -125,20 +122,21 @@ void DuckTransaction::PushDelete(DuckTableEntry &table_entry, RowVersionManager 
 	}
 }
 
-void DuckTransaction::PushAppend(DuckTableEntry &table_entry, idx_t start_row, idx_t row_count) {
+void DuckTransaction::PushAppend(DataTable &table, idx_t start_row, idx_t row_count) {
+	ModifyTable(table);
 	auto undo_entry = undo_buffer.CreateEntry(UndoFlags::INSERT_TUPLE, sizeof(AppendInfo));
-	auto append_info = reinterpret_cast<AppendInfo *>(undo_entry.GetDataMutable());
-	append_info->table = &table_entry;
+	auto append_info = reinterpret_cast<AppendInfo *>(undo_entry.Ptr());
+	append_info->table = &table;
 	append_info->start_row = start_row;
 	append_info->count = row_count;
 }
 
-UndoBufferReference DuckTransaction::CreateUpdateInfo(DuckTableEntry &table_entry, idx_t type_size, idx_t entries,
+UndoBufferReference DuckTransaction::CreateUpdateInfo(idx_t type_size, DataTable &data_table, idx_t entries,
                                                       idx_t row_group_start) {
 	idx_t alloc_size = UpdateInfo::GetAllocSize(type_size);
 	auto undo_entry = undo_buffer.CreateEntry(UndoFlags::UPDATE_TUPLE, alloc_size);
 	auto &update_info = UpdateInfo::Get(undo_entry);
-	UpdateInfo::Initialize(update_info, table_entry, transaction_id, row_group_start);
+	UpdateInfo::Initialize(update_info, data_table, transaction_id, row_group_start);
 	return undo_entry;
 }
 
@@ -147,7 +145,7 @@ void DuckTransaction::PushSequenceUsage(SequenceCatalogEntry &sequence, const Se
 	auto entry = sequence_usage.find(sequence);
 	if (entry == sequence_usage.end()) {
 		auto undo_entry = undo_buffer.CreateEntry(UndoFlags::SEQUENCE_VALUE, sizeof(SequenceValue));
-		auto sequence_info = reinterpret_cast<SequenceValue *>(undo_entry.GetDataMutable());
+		auto sequence_info = reinterpret_cast<SequenceValue *>(undo_entry.Ptr());
 		sequence_info->entry = &sequence;
 		sequence_info->usage_count = data.usage_count;
 		sequence_info->counter = data.counter;
@@ -158,6 +156,17 @@ void DuckTransaction::PushSequenceUsage(SequenceCatalogEntry &sequence, const Se
 		sequence_info.usage_count = data.usage_count;
 		sequence_info.counter = data.counter;
 	}
+}
+
+void DuckTransaction::ModifyTable(DataTable &tbl) {
+	lock_guard<mutex> guard(modified_tables_lock);
+	auto table_ref = reference<DataTable>(tbl);
+	auto entry = modified_tables.find(table_ref);
+	if (entry != modified_tables.end()) {
+		// already exists
+		return;
+	}
+	modified_tables.insert(make_pair(table_ref, tbl.shared_from_this()));
 }
 
 bool DuckTransaction::ChangesMade() {
@@ -171,9 +180,6 @@ UndoBufferProperties DuckTransaction::GetUndoProperties() {
 }
 
 bool DuckTransaction::AutomaticCheckpoint(AttachedDatabase &db, const UndoBufferProperties &properties) {
-	if (is_checkpoint_transaction) {
-		return false;
-	}
 	if (!ChangesMade()) {
 		// read-only transactions cannot trigger an automated checkpoint
 		return false;
@@ -216,11 +222,11 @@ ErrorData DuckTransaction::WriteToWAL(ClientContext &context, AttachedDatabase &
 		commit_state = storage_manager.GenStorageCommitState(*wal);
 
 		auto &profiler = *context.client_data->profiler;
-		auto commit_timer = profiler.StartTimer<MetricStorageCommitLocalStorageLatency>();
+		auto commit_timer = profiler.StartTimer(MetricType::COMMIT_LOCAL_STORAGE_LATENCY);
 		storage->Commit(commit_state.get());
 		commit_timer.EndTimer();
 
-		auto wal_timer = profiler.StartTimer<MetricStorageWriteToWALLatency>();
+		auto wal_timer = profiler.StartTimer(MetricType::WRITE_TO_WAL_LATENCY);
 		undo_buffer.WriteToWAL(*wal, commit_state.get());
 		if (commit_state->HasRowGroupData()) {
 			// if we have optimistically written any data AND we are writing to the WAL, we have written references to
@@ -263,14 +269,12 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 	}
 	CommitDropState drop_state(block_manager);
 	commit_info.drop_state = &drop_state;
-
-	ErrorData error_data;
 	try {
 		storage->Commit(commit_state.get());
 		undo_buffer.Commit(iterator_state, commit_info);
-		if (!db.IsSystem() && !db.IsTemporary() && Settings::Get<DebugForceCommitFailureSetting>(db.GetDatabase())) {
-			throw InvalidInputException("Forced commit failure (debug_force_commit_failure)");
-		}
+		// if (DebugForceAbortCommit()) {
+		// 	throw InvalidInputException("Force revert");
+		// }
 		if (commit_state) {
 			// if we have written to the WAL - flush after the commit has been successful
 			commit_state->FlushCommit();
@@ -278,37 +282,13 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 		drop_state.FinalizeCommit();
 		return ErrorData();
 	} catch (std::exception &ex) {
-		// Record the error and run RevertCommit() outside this try-catch: RevertCommit() iterates the
-		// undo buffer and may itself throw (e.g. Pin() failing under memory pressure), which would
-		// escape this noexcept function and trigger std::terminate.
-		error_data = ErrorData(ex);
-	}
-
-	try {
 		undo_buffer.RevertCommit(iterator_state, this->transaction_id);
-		if (!db.IsSystem() && !db.IsTemporary() &&
-		    Settings::Get<DebugForceCommitRevertFailureSetting>(db.GetDatabase())) {
-			throw IOException("Forced RevertCommit failure (debug_force_commit_revert_failure)");
-		}
 		if (commit_state) {
 			// if we have written to the WAL - truncate the WAL on failure
 			commit_state->RevertCommit();
 		}
-	} catch (std::exception &ex) {
-		// If we fail to revert the commit, the database is left in an undefined state - invalidate it.
-		// Record both the original commit error and the revert error so the root cause stays visible.
-		ValidChecker::Invalidate(db.GetDatabase(),
-		                         "Failed to revert transaction commit, database is in an undefined state. "
-		                         "Original commit error: " +
-		                             error_data.RawMessage() + ". RevertCommit error: " + ErrorData(ex).RawMessage());
-	} catch (...) {
-		// last line of defense: this is a noexcept function, nothing may escape
-		ValidChecker::Invalidate(db.GetDatabase(),
-		                         "Failed to revert transaction commit (unknown error), database is in an "
-		                         "undefined state. Original commit error: " +
-		                             error_data.RawMessage());
+		return ErrorData(ex);
 	}
-	return error_data;
 }
 
 ErrorData DuckTransaction::Rollback() {

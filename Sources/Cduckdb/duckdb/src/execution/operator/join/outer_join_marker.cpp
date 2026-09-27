@@ -1,6 +1,4 @@
 #include "duckdb/execution/operator/join/outer_join_marker.hpp"
-#include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/types/vector.hpp"
 
 namespace duckdb {
 
@@ -18,9 +16,6 @@ void OuterJoinMarker::Initialize(idx_t count_p) {
 
 void OuterJoinMarker::Reset() {
 	if (!enabled) {
-		return;
-	}
-	if (count == 0) {
 		return;
 	}
 	memset(found_match.get(), 0, sizeof(bool) * count);
@@ -61,7 +56,8 @@ void OuterJoinMarker::ConstructLeftJoinResult(DataChunk &left, DataChunk &result
 	if (remaining_count > 0) {
 		result.Slice(left, remaining_sel, remaining_count);
 		for (idx_t idx = left.ColumnCount(); idx < result.ColumnCount(); idx++) {
-			ConstantVector::SetNull(result.data[idx], count_t(remaining_count));
+			result.data[idx].SetVectorType(VectorType::CONSTANT_VECTOR);
+			ConstantVector::SetNull(result.data[idx], true);
 		}
 	}
 }
@@ -96,12 +92,14 @@ void OuterJoinMarker::Scan(OuterJoinGlobalScanState &gstate, OuterJoinLocalScanS
 			// if there were any tuples that didn't find a match, output them
 			idx_t left_column_count = result.ColumnCount() - lstate.scan_chunk.ColumnCount();
 			for (idx_t i = 0; i < left_column_count; i++) {
-				ConstantVector::SetNull(result.data[i], count_t(result_count));
+				result.data[i].SetVectorType(VectorType::CONSTANT_VECTOR);
+				ConstantVector::SetNull(result.data[i], true);
 			}
 			for (idx_t col_idx = left_column_count; col_idx < result.ColumnCount(); col_idx++) {
 				result.data[col_idx].Slice(lstate.scan_chunk.data[col_idx - left_column_count], lstate.match_sel,
 				                           result_count);
 			}
+			result.SetCardinality(result_count);
 			return;
 		}
 	}

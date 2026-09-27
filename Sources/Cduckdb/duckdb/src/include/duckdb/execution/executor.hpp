@@ -75,7 +75,7 @@ public:
 	void ThrowException();
 
 	//! Work on tasks for this specific executor, until there are no tasks remaining
-	bool WorkOnTasks();
+	void WorkOnTasks();
 
 	//! Flush a thread context into the client context
 	void Flush(ThreadContext &context);
@@ -183,7 +183,7 @@ private:
 	shared_ptr<Task> task;
 
 	//! Task that have been descheduled
-	reference_map_t<Task, shared_ptr<Task>> to_be_rescheduled_tasks;
+	unordered_map<Task *, shared_ptr<Task>> to_be_rescheduled_tasks;
 	//! The semaphore to signal task rescheduling
 	std::condition_variable task_reschedule;
 

@@ -1,5 +1,4 @@
 #include "duckdb/main/buffered_data/buffered_data.hpp"
-#include "duckdb/main/stream_query_result.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/client_context.hpp"
 

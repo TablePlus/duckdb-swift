@@ -1,5 +1,4 @@
 #include "duckdb/execution/operator/csv_scanner/encode/csv_encoder.hpp"
-#include "duckdb/catalog/catalog.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/config.hpp"

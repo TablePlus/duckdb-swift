@@ -66,7 +66,17 @@ unique_ptr<ChunkInfo> ChunkInfo::Read(FixedSizeAllocator &allocator, ReadStream 
 	}
 }
 
-idx_t ChunkInfo::GetRowCount(ScanOptions options, idx_t max_count) {
+idx_t ChunkInfo::GetCommittedDeletedCount(idx_t max_count) const {
+	ScanOptions options(TransactionData(0, TRANSACTION_ID_START));
+	options.insert_type = InsertedScanType::ALL_ROWS;
+	options.delete_type = DeletedScanType::OMIT_COMMITTED_DELETES;
+	idx_t not_deleted_count = GetSelVector(options, nullptr, max_count);
+	return max_count - not_deleted_count;
+}
+
+idx_t ChunkInfo::GetCheckpointRowCount(TransactionData transaction, idx_t max_count) {
+	ScanOptions options(transaction);
+	options.delete_type = DeletedScanType::INCLUDE_ALL_DELETED;
 	return GetSelVector(options, nullptr, max_count);
 }
 
@@ -123,10 +133,6 @@ bool ChunkConstantInfo::HasDeletes(transaction_t transaction_id) const {
 	}
 	bool is_deleted = insert_id >= TRANSACTION_ID_START || delete_id <= transaction_id;
 	return is_deleted;
-}
-
-bool ChunkConstantInfo::HasUncommittedChanges() const {
-	return insert_id >= TRANSACTION_ID_START || (delete_id != NOT_DELETED_ID && delete_id >= TRANSACTION_ID_START);
 }
 
 bool ChunkConstantInfo::Cleanup(transaction_t lowest_transaction) const {
@@ -456,33 +462,6 @@ bool ChunkVectorInfo::HasDeletes(transaction_t transaction_id) const {
 
 	for (idx_t i = 0; i < STANDARD_VECTOR_SIZE; i++) {
 		if (deleted[i] <= transaction_id) {
-			return true;
-		}
-	}
-	return false;
-}
-
-bool ChunkVectorInfo::HasUncommittedChanges() const {
-	if (HasConstantInsertionId()) {
-		if (ConstantInsertId() >= TRANSACTION_ID_START) {
-			return true;
-		}
-	} else {
-		auto insert_segment = allocator.GetHandle(GetInsertedPointer());
-		auto inserted = insert_segment.GetPtr<transaction_t>();
-		for (idx_t i = 0; i < STANDARD_VECTOR_SIZE; i++) {
-			if (inserted[i] >= TRANSACTION_ID_START) {
-				return true;
-			}
-		}
-	}
-	if (!AnyDeleted()) {
-		return false;
-	}
-	auto delete_segment = allocator.GetHandle(GetDeletedPointer());
-	auto deleted = delete_segment.GetPtr<transaction_t>();
-	for (idx_t i = 0; i < STANDARD_VECTOR_SIZE; i++) {
-		if (deleted[i] != NOT_DELETED_ID && deleted[i] >= TRANSACTION_ID_START) {
 			return true;
 		}
 	}

@@ -6,6 +6,7 @@
 #include "duckdb/common/types/uhugeint.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/interval.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -31,7 +32,7 @@ int64_t SubtractOperator::Operation(date_t left, date_t right) {
 
 template <>
 date_t SubtractOperator::Operation(date_t left, int32_t right) {
-	if (!left.IsFinite()) {
+	if (!Date::IsFinite(left)) {
 		return left;
 	}
 	int32_t days;
@@ -40,7 +41,7 @@ date_t SubtractOperator::Operation(date_t left, int32_t right) {
 	}
 
 	date_t result(days);
-	if (!result.IsFinite()) {
+	if (!Date::IsFinite(result)) {
 		throw OutOfRangeException("Date out of range");
 	}
 	return result;
@@ -74,15 +75,6 @@ timestamp_t SubtractOperator::Operation(timestamp_t left, interval_t right) {
 template <>
 interval_t SubtractOperator::Operation(timestamp_t left, timestamp_t right) {
 	return Interval::GetDifference(left, right);
-}
-
-template <>
-int64_t SubtractOperator::Operation(timestamp_t left, timestamp_t right) {
-	int64_t result;
-	if (!TrySubtractOperator::Operation(left, right, result)) {
-		throw OutOfRangeException("Overflow in timestamp subtraction");
-	}
-	return result;
 }
 
 //===--------------------------------------------------------------------===//

@@ -18,7 +18,7 @@ void Event::CompleteDependency() {
 		// all dependencies have been completed: schedule the event
 		D_ASSERT(total_tasks == 0);
 		Schedule();
-		if (total_tasks == 0 && AutoFinishWithoutTasks()) {
+		if (total_tasks == 0) {
 			Finish();
 		}
 	}

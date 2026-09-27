@@ -22,50 +22,6 @@ public:
 public:
 	SubqueryExpression();
 
-public:
-	const unique_ptr<SelectStatement> &Subquery() const {
-		return subquery;
-	}
-	unique_ptr<SelectStatement> &SubqueryMutable() {
-		return subquery;
-	}
-	SubqueryType GetSubqueryType() const {
-		return subquery_type;
-	}
-	SubqueryType &GetSubqueryTypeMutable() {
-		return subquery_type;
-	}
-	const unique_ptr<ParsedExpression> &GetChild() const {
-		return child;
-	}
-	unique_ptr<ParsedExpression> &GetChildMutable() {
-		return child;
-	}
-	ExpressionType GetComparisonType() const {
-		return comparison_type;
-	}
-	ExpressionType &GetComparisonTypeMutable() {
-		return comparison_type;
-	}
-
-	bool HasSubquery() const override {
-		return true;
-	}
-	bool IsScalar() const override {
-		return false;
-	}
-
-	string ToString() const override;
-
-	bool Equals(const ParsedExpression &other) const override;
-	hash_t Hash() const override;
-
-	unique_ptr<ParsedExpression> Copy() const override;
-
-	void Serialize(Serializer &serializer) const override;
-	static unique_ptr<ParsedExpression> Deserialize(Deserializer &deserializer);
-
-private:
 	//! The actual subquery
 	unique_ptr<SelectStatement> subquery;
 	//! The subquery type
@@ -75,5 +31,22 @@ private:
 	unique_ptr<ParsedExpression> child;
 	//! The comparison type of the child expression with the subquery (in case of ANY, ALL operators), empty otherwise
 	ExpressionType comparison_type;
+
+public:
+	bool HasSubquery() const override {
+		return true;
+	}
+	bool IsScalar() const override {
+		return false;
+	}
+
+	string ToString() const override;
+
+	static bool Equal(const SubqueryExpression &a, const SubqueryExpression &b);
+
+	unique_ptr<ParsedExpression> Copy() const override;
+
+	void Serialize(Serializer &serializer) const override;
+	static unique_ptr<ParsedExpression> Deserialize(Deserializer &deserializer);
 };
 } // namespace duckdb

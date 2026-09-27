@@ -1,5 +1,3 @@
-#include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/execution/operator/projection/physical_tableinout_function.hpp"
 
 namespace duckdb {
@@ -94,7 +92,6 @@ OperatorResultType PhysicalTableInOutFunction::Execute(ExecutionContext &context
 			SetOrdinality(chunk, this->ordinality_idx, state.current_ordinality_idx, ordinality);
 			state.current_ordinality_idx += ordinality;
 		}
-		chunk.SetChildCardinality(chunk.size());
 		return result;
 	}
 	// when project_input is set we execute the input function row-by-row
@@ -109,9 +106,10 @@ OperatorResultType PhysicalTableInOutFunction::Execute(ExecutionContext &context
 		state.input_chunk.Reset();
 		// set up the input data to the table in-out function
 		for (idx_t col_idx = 0; col_idx < state.input_chunk.ColumnCount(); col_idx++) {
-			ConstantVector::Reference(state.input_chunk.data[col_idx], count_t(1), input.data[col_idx], state.row_index,
+			ConstantVector::Reference(state.input_chunk.data[col_idx], input.data[col_idx], state.row_index,
 			                          input.size());
 		}
+		state.input_chunk.SetCardinality(1);
 		state.row_index++;
 		state.new_row = false;
 		state.current_ordinality_idx = 1;
@@ -123,8 +121,7 @@ OperatorResultType PhysicalTableInOutFunction::Execute(ExecutionContext &context
 	for (idx_t project_idx = 0; project_idx < projected_input.size(); project_idx++) {
 		auto source_idx = projected_input[project_idx];
 		auto target_idx = base_idx + project_idx;
-		ConstantVector::Reference(chunk.data[target_idx], count_t(chunk.size()), input.data[source_idx],
-		                          state.row_index - 1, input.size());
+		ConstantVector::Reference(chunk.data[target_idx], input.data[source_idx], state.row_index - 1, input.size());
 	}
 	auto result = function.in_out_function(context, data, state.input_chunk, chunk);
 	if (this->ordinality_idx.IsValid()) {
@@ -132,7 +129,6 @@ OperatorResultType PhysicalTableInOutFunction::Execute(ExecutionContext &context
 		SetOrdinality(chunk, this->ordinality_idx, state.current_ordinality_idx, ordinality);
 		state.current_ordinality_idx += ordinality;
 	}
-	chunk.SetChildCardinality(chunk.size());
 	if (result == OperatorResultType::FINISHED) {
 		return result;
 	}
@@ -152,7 +148,7 @@ InsertionOrderPreservingMap<string> PhysicalTableInOutFunction::ParamsToString()
 			result[it.first] = it.second;
 		}
 	} else {
-		result["Name"] = function.name.GetIdentifierName();
+		result["Name"] = function.name;
 	}
 	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;

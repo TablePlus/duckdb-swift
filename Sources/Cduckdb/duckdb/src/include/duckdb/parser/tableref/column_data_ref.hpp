@@ -21,11 +21,11 @@ public:
 
 public:
 	explicit ColumnDataRef(optionally_owned_ptr<ColumnDataCollection> collection_p,
-	                       vector<Identifier> expected_names = vector<Identifier>());
+	                       vector<string> expected_names = vector<string>());
 
 public:
 	//! The set of expected names
-	vector<Identifier> expected_names;
+	vector<string> expected_names;
 	//! (Optionally) the owned collection
 	optionally_owned_ptr<ColumnDataCollection> collection;
 

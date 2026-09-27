@@ -29,6 +29,15 @@ struct DuckCleanupInfo {
 	bool ScheduleCleanup() noexcept;
 };
 
+struct ActiveCheckpointWrapper {
+	explicit ActiveCheckpointWrapper(DuckTransactionManager &manager);
+
+	void Clear();
+
+	DuckTransactionManager &manager;
+	bool is_cleared;
+};
+
 //! The Transaction Manager is responsible for creating and managing
 //! transactions
 class DuckTransactionManager : public TransactionManager {
@@ -60,8 +69,8 @@ public:
 	transaction_t GetActiveCheckpoint() const {
 		return active_checkpoint;
 	}
-	void SetActiveCheckpoint(transaction_t checkpoint_id);
-	void ResetActiveCheckpoint();
+	transaction_t GetNewCheckpointId();
+	void ResetCheckpointId();
 
 	bool IsDuckTransactionManager() override {
 		return true;

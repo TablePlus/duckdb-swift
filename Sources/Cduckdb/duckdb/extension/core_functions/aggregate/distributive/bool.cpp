@@ -1,59 +1,97 @@
 #include "core_functions/aggregate/distributive_functions.hpp"
-#include "duckdb/common/operator/aggregate_operators.hpp"
+#include "duckdb/common/exception.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/function/function_set.hpp"
 
 namespace duckdb {
 
 namespace {
 
 struct BoolState {
-	using STATE_TYPE = OptionalStateType<bool>;
-	bool value;
-	bool is_set;
+	bool empty;
+	bool val;
 };
 
-template <class REDUCE_OP, bool INIT_VALUE>
-struct BoolAggregate {
-	// No Initialize: StateInitialize falls back to memset(state, 0) = nullopt
+struct BoolAndFunFunction {
+	template <class STATE>
+	static void Initialize(STATE &state) {
+		state.val = true;
+		state.empty = true;
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE &target, AggregateInputData &) {
+		target.val = target.val && source.val;
+		target.empty = target.empty && source.empty;
+	}
+
+	template <class T, class STATE>
+	static void Finalize(STATE &state, T &target, AggregateFinalizeData &finalize_data) {
+		if (state.empty) {
+			finalize_data.ReturnNull();
+			return;
+		}
+		target = state.val;
+	}
 
 	template <class INPUT_TYPE, class STATE, class OP>
-	static void Operation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &) {
-		state.value = REDUCE_OP::template Operation<bool>(state.is_set ? state.value : INIT_VALUE, bool(input));
-		state.is_set = true;
+	static void Operation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &unary_input) {
+		state.empty = false;
+		state.val = input && state.val;
 	}
 
 	template <class INPUT_TYPE, class STATE, class OP>
 	static void ConstantOperation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &unary_input,
 	                              idx_t count) {
-		if (count > 0) {
+		for (idx_t i = 0; i < count; i++) {
 			Operation<INPUT_TYPE, STATE, OP>(state, input, unary_input);
 		}
+	}
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+struct BoolOrFunFunction {
+	template <class STATE>
+	static void Initialize(STATE &state) {
+		state.val = false;
+		state.empty = true;
 	}
 
 	template <class STATE, class OP>
 	static void Combine(const STATE &source, STATE &target, AggregateInputData &) {
-		if (!source.is_set) {
-			return;
-		}
-		target.value = REDUCE_OP::template Operation<bool>(target.is_set ? target.value : INIT_VALUE, source.value);
-		target.is_set = true;
+		target.val = target.val || source.val;
+		target.empty = target.empty && source.empty;
 	}
 
 	template <class T, class STATE>
 	static void Finalize(STATE &state, T &target, AggregateFinalizeData &finalize_data) {
-		if (!state.is_set) {
+		if (state.empty) {
 			finalize_data.ReturnNull();
 			return;
 		}
-		target = state.value;
+		target = state.val;
+	}
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &unary_input) {
+		state.empty = false;
+		state.val = input || state.val;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &unary_input,
+	                              idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			Operation<INPUT_TYPE, STATE, OP>(state, input, unary_input);
+		}
 	}
 
 	static bool IgnoreNull() {
 		return true;
 	}
 };
-
-using BoolAndFunFunction = BoolAggregate<LogicalAnd, true>;
-using BoolOrFunFunction = BoolAggregate<LogicalOr, false>;
 
 } // namespace
 

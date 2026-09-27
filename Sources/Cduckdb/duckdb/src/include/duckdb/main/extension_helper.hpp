@@ -11,7 +11,6 @@
 #include "duckdb.hpp"
 #include "duckdb/main/extension_entries.hpp"
 #include "duckdb/main/extension_install_info.hpp"
-#include "duckdb/main/extension_load_options.hpp"
 #include "duckdb/main/settings.hpp"
 
 #include <string>
@@ -19,7 +18,6 @@
 namespace duckdb {
 
 class DuckDB;
-class ExtensionActiveLoad;
 
 enum class ExtensionLoadResult : uint8_t { LOADED_EXTENSION = 0, EXTENSION_UNKNOWN = 1, NOT_LOADED = 2 };
 
@@ -105,8 +103,8 @@ public:
 	static unique_ptr<ExtensionInstallInfo> InstallExtension(DatabaseInstance &db, FileSystem &fs,
 	                                                         const string &extension, ExtensionInstallOptions &options);
 	//! Load an extension
-	static void LoadExternalExtension(ClientContext &context, const ExtensionLoadOptions &options);
-	static void LoadExternalExtension(DatabaseInstance &db, FileSystem &fs, const ExtensionLoadOptions &options);
+	static void LoadExternalExtension(ClientContext &context, const string &extension);
+	static void LoadExternalExtension(DatabaseInstance &db, FileSystem &fs, const string &extension);
 
 	//! Autoload an extension (depending on config, potentially a nop. Throws when installation fails)
 	static void AutoLoadExtension(ClientContext &context, const string &extension_name);
@@ -158,7 +156,7 @@ public:
 
 	//! Extension can have aliases
 	static idx_t ExtensionAliasCount();
-	static ExtensionAlias GetInternalExtensionAlias(idx_t index);
+	static ExtensionAlias GetExtensionAlias(idx_t index);
 
 	//! Get public signing keys for extension signing
 	static const vector<string> GetPublicKeys(bool allow_community_extension = false);

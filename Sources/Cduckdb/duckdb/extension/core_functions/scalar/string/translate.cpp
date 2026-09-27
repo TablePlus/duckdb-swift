@@ -35,10 +35,10 @@ static string_t TranslateScalarFunction(const string_t &haystack, const string_t
 	// Character to be replaced
 	unordered_map<int32_t, int32_t> to_replace;
 	while (i < size_needle && j < size_thread) {
-		auto codepoint_needle = Utf8Proc::UTF8ToCodepoint(input_needle, sz, size_needle - i);
+		auto codepoint_needle = Utf8Proc::UTF8ToCodepoint(input_needle, sz);
 		input_needle += sz;
 		i += UnsafeNumericCast<idx_t>(sz);
-		auto codepoint_thread = Utf8Proc::UTF8ToCodepoint(input_thread, sz, size_thread - j);
+		auto codepoint_thread = Utf8Proc::UTF8ToCodepoint(input_thread, sz);
 		input_thread += sz;
 		j += UnsafeNumericCast<idx_t>(sz);
 		// Ignore unicode character that is existed in to_replace
@@ -50,7 +50,7 @@ static string_t TranslateScalarFunction(const string_t &haystack, const string_t
 	// Character to be deleted
 	unordered_set<int32_t> to_delete;
 	while (i < size_needle) {
-		auto codepoint_needle = Utf8Proc::UTF8ToCodepoint(input_needle, sz, size_needle - i);
+		auto codepoint_needle = Utf8Proc::UTF8ToCodepoint(input_needle, sz);
 		input_needle += sz;
 		i += UnsafeNumericCast<idx_t>(sz);
 		// Add unicode character that will be deleted
@@ -61,7 +61,7 @@ static string_t TranslateScalarFunction(const string_t &haystack, const string_t
 
 	char c[5] = {'\0', '\0', '\0', '\0', '\0'};
 	for (i = 0; i < size_haystack; i += UnsafeNumericCast<idx_t>(sz)) {
-		auto codepoint_haystack = Utf8Proc::UTF8ToCodepoint(input_haystack, sz, size_haystack - i);
+		auto codepoint_haystack = Utf8Proc::UTF8ToCodepoint(input_haystack, sz);
 		if (to_replace.count(codepoint_haystack) != 0) {
 			Utf8Proc::CodepointToUtf8(to_replace[codepoint_haystack], c_sz, c);
 			result.insert(result.end(), c, c + c_sz);
@@ -75,16 +75,16 @@ static string_t TranslateScalarFunction(const string_t &haystack, const string_t
 }
 
 static void TranslateFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	const auto &haystack_vector = args.data[0];
-	const auto &needle_vector = args.data[1];
-	const auto &thread_vector = args.data[2];
+	auto &haystack_vector = args.data[0];
+	auto &needle_vector = args.data[1];
+	auto &thread_vector = args.data[2];
 
 	vector<char> buffer;
-	auto &heap = StringVector::GetStringHeap(result);
 	TernaryExecutor::Execute<string_t, string_t, string_t, string_t>(
-	    haystack_vector, needle_vector, thread_vector, result,
+	    haystack_vector, needle_vector, thread_vector, result, args.size(),
 	    [&](string_t input_string, string_t needle_string, string_t thread_string) {
-		    return heap.AddString(TranslateScalarFunction(input_string, needle_string, thread_string, buffer));
+		    return StringVector::AddString(result,
+		                                   TranslateScalarFunction(input_string, needle_string, thread_string, buffer));
 	    });
 }
 

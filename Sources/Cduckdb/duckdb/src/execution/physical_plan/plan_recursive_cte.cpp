@@ -1,12 +1,8 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/execution/operator/scan/physical_column_data_scan.hpp"
-#include "duckdb/execution/operator/set/physical_cte.hpp"
 #include "duckdb/execution/operator/set/physical_recursive_cte.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
-#include "duckdb/parallel/pipeline_broadcast_exchange.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
-#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
-#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_recursive_cte.hpp"
 #include "duckdb/function/aggregate/distributive_function_utils.hpp"
@@ -20,20 +16,19 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalRecursiveCTE &op) {
 	D_ASSERT(op.children.size() == 2);
 
 	// Create the working_table that the PhysicalRecursiveCTE will use for evaluation.
-	auto working_table = make_shared_ptr<ColumnDataCollection>(context, op.internal_types);
+	auto working_table = make_shared_ptr<ColumnDataCollection>(context, op.types);
 
 	// Add the ColumnDataCollection to the context of this PhysicalPlanGenerator
 	recursive_cte_tables[op.table_index] = working_table;
 
 	auto &left = CreatePlan(*op.children[0]);
 
-	// If the logical operator has no key targets, then we create a normal recursive CTE operator.
+	// If the logical operator has no key targets or all columns are referenced,
+	// then we create a normal recursive CTE operator.
 	if (op.key_targets.empty()) {
 		auto recurring_table = make_shared_ptr<ColumnDataCollection>(context, op.types);
 		recurring_cte_tables[op.table_index] = recurring_table;
-		planning_recursive_cte_depth++;
 		auto &right = CreatePlan(*op.children[1]);
-		planning_recursive_cte_depth--;
 		auto &cte = Make<PhysicalRecursiveCTE>(op.ctename, op.table_index, op.types, op.union_all, left, right,
 		                                       op.estimated_cardinality);
 		auto &cast_cte = cte.Cast<PhysicalRecursiveCTE>();
@@ -44,37 +39,48 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalRecursiveCTE &op) {
 		return cte;
 	}
 
-	vector<LogicalType> distinct_types, payload_types;
-	vector<idx_t> distinct_idx, payload_idx;
-	vector<unique_ptr<Expression>> payload_aggregates;
+	vector<LogicalType> payload_types, distinct_types;
+	vector<idx_t> payload_idx, distinct_idx;
+	vector<unique_ptr<BoundAggregateExpression>> payload_aggregates;
 
 	// create a group for each target, these are the columns that should be grouped
 	unordered_map<idx_t, idx_t> group_by_references;
 	for (idx_t i = 0; i < op.key_targets.size(); i++) {
 		auto &target = op.key_targets[i];
-		D_ASSERT(target->GetExpressionType() == ExpressionType::BOUND_REF);
+		D_ASSERT(target->type == ExpressionType::BOUND_REF);
 		auto &bound_ref = target->Cast<BoundReferenceExpression>();
-		distinct_idx.emplace_back(bound_ref.Index());
-		distinct_types.push_back(bound_ref.GetReturnType());
-		group_by_references[bound_ref.Index()] = i;
+		group_by_references[bound_ref.index] = i;
 	}
 
 	/*
 	 * iterate over all types
 	 * 		Differentiate the occurrence of the column in the key clause.
 	 */
-	idx_t pay_idx = 0;
-	for (idx_t i = 0; i < left.GetTypes().size(); ++i) {
-		// Check if we can directly refer to a group, or if we need to push an aggregate
+	auto &types = left.GetTypes();
+	for (idx_t i = 0; i < types.size(); ++i) {
+		auto logical_type = types[i];
+		// Check if we can directly refer to a group, or if we need to push an aggregate with LAST
 		auto entry = group_by_references.find(i);
-		if (entry == group_by_references.end()) {
-			D_ASSERT(op.payload_aggregates[pay_idx]->GetExpressionType() == ExpressionType::BOUND_AGGREGATE);
-			auto &bound_aggr = op.payload_aggregates[pay_idx]->Cast<BoundAggregateExpression>();
+		if (entry != group_by_references.end()) {
+			// Column has a key, note the column index to make a distinction on it
+			distinct_idx.emplace_back(i);
+			distinct_types.push_back(logical_type);
+		} else {
+			// Column is not in the key clause, so we need to create an aggregate
+			auto bound = make_uniq<BoundReferenceExpression>(logical_type, 0U);
 
-			// add the logical type of the aggregate to the payload types
-			payload_types.push_back(bound_aggr.GetReturnType());
-			payload_aggregates.push_back(std::move(op.payload_aggregates[pay_idx++]));
+			vector<unique_ptr<Expression>> first_children;
+			first_children.push_back(std::move(bound));
+
+			FunctionBinder function_binder(context);
+			auto first_aggregate =
+			    function_binder.BindAggregateFunction(LastFunctionGetter::GetFunction(logical_type),
+			                                          std::move(first_children), nullptr, AggregateType::NON_DISTINCT);
+			first_aggregate->order_bys = nullptr;
+
+			payload_types.push_back(logical_type);
 			payload_idx.emplace_back(i);
+			payload_aggregates.push_back(std::move(first_aggregate));
 		}
 	}
 
@@ -82,9 +88,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalRecursiveCTE &op) {
 	auto recurring_table = make_shared_ptr<ColumnDataCollection>(context, op.types);
 	recurring_cte_tables[op.table_index] = recurring_table;
 
-	planning_recursive_cte_depth++;
 	auto &right = CreatePlan(*op.children[1]);
-	planning_recursive_cte_depth--;
 	auto &cte = Make<PhysicalRecursiveCTE>(op.ctename, op.table_index, op.types, op.union_all, left, right,
 	                                       op.estimated_cardinality);
 	auto &cast_cte = cte.Cast<PhysicalRecursiveCTE>();
@@ -94,7 +98,6 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalRecursiveCTE &op) {
 	cast_cte.distinct_types = distinct_types;
 	cast_cte.payload_idx = payload_idx;
 	cast_cte.payload_types = payload_types;
-	cast_cte.internal_types = op.internal_types;
 	cast_cte.ref_recurring = op.ref_recurring;
 	cast_cte.working_table = working_table;
 	cast_cte.recurring_table = recurring_table;
@@ -113,26 +116,13 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalCTERef &op) {
 		auto &chunk_scan = Make<PhysicalColumnDataScan>(op.chunk_types, PhysicalOperatorType::CTE_SCAN,
 		                                                op.estimated_cardinality, op.cte_index);
 
-		auto &cast_chunk_scan = chunk_scan.Cast<PhysicalColumnDataScan>();
-		auto exchange = materialized_cte_exchanges.find(op.cte_index);
-		if (exchange != materialized_cte_exchanges.end()) {
-			auto cte = recursive_cte_tables.find(op.cte_index);
-			if (cte == recursive_cte_tables.end()) {
-				throw InvalidInputException("Referenced materialized CTE does not exist.");
-			}
-			// Exchange consumers can still be converted to materialized scans during pipeline construction.
-			cast_chunk_scan.collection = cte->second.get();
-			auto consumer_idx = exchange->second->RegisterConsumer();
-			auto &source = Make<PhysicalCTEConsumerSource>(op.chunk_types, op.estimated_cardinality, op.cte_index,
-			                                               exchange->second, consumer_idx);
-			cast_chunk_scan.cte_source = source;
-		} else {
-			auto cte = recursive_cte_tables.find(op.cte_index);
-			if (cte == recursive_cte_tables.end()) {
-				throw InvalidInputException("Referenced materialized CTE does not exist.");
-			}
-			cast_chunk_scan.collection = cte->second.get();
+		auto cte = recursive_cte_tables.find(op.cte_index);
+		if (cte == recursive_cte_tables.end()) {
+			throw InvalidInputException("Referenced materialized CTE does not exist.");
 		}
+
+		auto &cast_chunk_scan = chunk_scan.Cast<PhysicalColumnDataScan>();
+		cast_chunk_scan.collection = cte->second.get();
 		materialized_cte->second.push_back(cast_chunk_scan);
 		return chunk_scan;
 	}

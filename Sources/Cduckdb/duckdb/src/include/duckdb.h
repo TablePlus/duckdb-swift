@@ -126,8 +126,6 @@ typedef enum DUCKDB_TYPE {
 	DUCKDB_TYPE_TIME_TZ = 30,
 	// duckdb_timestamp (microseconds)
 	DUCKDB_TYPE_TIMESTAMP_TZ = 31,
-	// duckdb_timestamp (nanoseconds)
-	DUCKDB_TYPE_TIMESTAMP_TZ_NS = 42,
 	// enum type, only useful as logical type
 	DUCKDB_TYPE_ANY = 34,
 	// duckdb_bignum
@@ -195,6 +193,9 @@ typedef enum duckdb_statement_type {
 	DUCKDB_STATEMENT_TYPE_ATTACH = 25,
 	DUCKDB_STATEMENT_TYPE_DETACH = 26,
 	DUCKDB_STATEMENT_TYPE_MULTI = 27,
+	DUCKDB_STATEMENT_TYPE_COPY_DATABASE = 28,
+	DUCKDB_STATEMENT_TYPE_UPDATE_EXTENSIONS = 29,
+	DUCKDB_STATEMENT_TYPE_MERGE_INTO = 30,
 } duckdb_statement_type;
 
 //! An enum over DuckDB's different error types.
@@ -934,7 +935,7 @@ process. Must be destroyed with 'duckdb_destroy_instance_cache'.
 
 * @return The database instance cache.
 */
-DUCKDB_C_API duckdb_instance_cache duckdb_create_instance_cache(void);
+DUCKDB_C_API duckdb_instance_cache duckdb_create_instance_cache();
 
 /*!
 Creates a new database instance in the instance cache, or retrieves an existing database instance.
@@ -1071,7 +1072,7 @@ Returns the version of the linked DuckDB, with a version postfix for dev version
 
 Usually used for developing C extensions that must return this for a compatibility check.
 */
-DUCKDB_C_API const char *duckdb_library_version(void);
+DUCKDB_C_API const char *duckdb_library_version();
 
 /*!
 Get the list of (fully qualified) table names of the query.
@@ -1114,7 +1115,7 @@ This should not be called in a loop as it internally loops over all the options.
 
 * @return The amount of config options available.
 */
-DUCKDB_C_API size_t duckdb_config_count(void);
+DUCKDB_C_API size_t duckdb_config_count();
 
 /*!
 Obtains a human-readable name and description of a specific configuration option. This can be used to e.g.
@@ -1653,7 +1654,7 @@ This is the amount of tuples that will fit into a data chunk created by `duckdb_
 
 * @return The vector size.
 */
-DUCKDB_C_API idx_t duckdb_vector_size(void);
+DUCKDB_C_API idx_t duckdb_vector_size();
 
 /*!
 Whether or not the duckdb_string_t value is inlined.
@@ -2592,14 +2593,6 @@ Creates a TIMESTAMP_TZ value from a duckdb_timestamp
 DUCKDB_C_API duckdb_value duckdb_create_timestamp_tz(duckdb_timestamp input);
 
 /*!
-Creates a TIMESTAMP_TZ_NS value from a duckdb_timestamp_ns
-
-* @param input The duckdb_timestamp_ns value
-* @return The value. This must be destroyed with `duckdb_destroy_value`.
-*/
-DUCKDB_C_API duckdb_value duckdb_create_timestamp_tz_ns(duckdb_timestamp_ns input);
-
-/*!
 Creates a TIMESTAMP_S value from a duckdb_timestamp_s
 
 * @param input The duckdb_timestamp_s value
@@ -2826,14 +2819,6 @@ Returns the TIMESTAMP_TZ value of the given value.
 DUCKDB_C_API duckdb_timestamp duckdb_get_timestamp_tz(duckdb_value val);
 
 /*!
-Returns the TIMESTAMP_TZ_NS value of the given value.
-
-* @param val A duckdb_value containing a TIMESTAMP_TZ_NS
-* @return A duckdb_timestamp_ns, or MinValue<timestamp_tz_ns> if the value cannot be converted
-*/
-DUCKDB_C_API duckdb_timestamp_ns duckdb_get_timestamp_tz_ns(duckdb_value val);
-
-/*!
 Returns the duckdb_timestamp_s value of the given value.
 
 * @param val A duckdb_value containing a TIMESTAMP_S
@@ -2946,7 +2931,7 @@ Creates a map value from a map type and two arrays, one for the keys and one for
 * @param map_type The map type
 * @param keys The keys of the map
 * @param values The values of the map
-* @param entry_count The number of entries (key-value pairs) in the map
+* @param entry_count The number of entrys (key-value pairs) in the map
 * @return The map value, or nullptr, if the parameters are invalid.
 */
 DUCKDB_C_API duckdb_value duckdb_create_map_value(duckdb_logical_type map_type, duckdb_value *keys,
@@ -3003,7 +2988,7 @@ Creates a value of type SQLNULL.
 
 * @return The duckdb_value representing SQLNULL. This must be destroyed with `duckdb_destroy_value`.
 */
-DUCKDB_C_API duckdb_value duckdb_create_null_value(void);
+DUCKDB_C_API duckdb_value duckdb_create_null_value();
 
 /*!
 Returns the number of elements in a LIST value.
@@ -3709,7 +3694,7 @@ The return value must be destroyed with `duckdb_destroy_scalar_function`.
 
 * @return The scalar function object.
 */
-DUCKDB_C_API duckdb_scalar_function duckdb_create_scalar_function(void);
+DUCKDB_C_API duckdb_scalar_function duckdb_create_scalar_function();
 
 /*!
 Destroys the given scalar function object.
@@ -4045,7 +4030,7 @@ The return value should be destroyed with `duckdb_destroy_aggregate_function`.
 
 * @return The aggregate function object.
 */
-DUCKDB_C_API duckdb_aggregate_function duckdb_create_aggregate_function(void);
+DUCKDB_C_API duckdb_aggregate_function duckdb_create_aggregate_function();
 
 /*!
 Destroys the given aggregate function object.
@@ -4206,7 +4191,7 @@ The return value should be destroyed with `duckdb_destroy_table_function`.
 
 * @return The table function object.
 */
-DUCKDB_C_API duckdb_table_function duckdb_create_table_function(void);
+DUCKDB_C_API duckdb_table_function duckdb_create_table_function();
 
 /*!
 Destroys the given table function object.
@@ -5420,7 +5405,7 @@ Creates a new cast function object.
 
 * @return The cast function object.
 */
-DUCKDB_C_API duckdb_cast_function duckdb_create_cast_function(void);
+DUCKDB_C_API duckdb_cast_function duckdb_create_cast_function();
 
 /*!
 Sets the source type of the cast function.
@@ -5608,7 +5593,7 @@ Creates a new file open options instance with blank settings.
 
 * @return The new file open options instance. Must be destroyed with `duckdb_destroy_file_open_options`.
 */
-DUCKDB_C_API duckdb_file_open_options duckdb_create_file_open_options(void);
+DUCKDB_C_API duckdb_file_open_options duckdb_create_file_open_options();
 
 /*!
 Sets a specific flag in the file open options.
@@ -5719,7 +5704,7 @@ Creates a configuration option instance.
 
 * @return The resulting configuration option instance. Must be destroyed with `duckdb_destroy_config_option`.
 */
-DUCKDB_C_API duckdb_config_option duckdb_create_config_option(void);
+DUCKDB_C_API duckdb_config_option duckdb_create_config_option();
 
 /*!
 Destroys the given configuration option instance.
@@ -5807,7 +5792,7 @@ The return value must be destroyed with `duckdb_destroy_copy_function`.
 
 * @return The copy function object.
 */
-DUCKDB_C_API duckdb_copy_function duckdb_create_copy_function(void);
+DUCKDB_C_API duckdb_copy_function duckdb_create_copy_function();
 
 /*!
 Sets the name of the copy function.
@@ -6234,7 +6219,7 @@ Creates a new log storage object.
 
 * @return A log storage object. Must be destroyed with `duckdb_destroy_log_storage`.
 */
-DUCKDB_C_API duckdb_log_storage duckdb_create_log_storage(void);
+DUCKDB_C_API duckdb_log_storage duckdb_create_log_storage();
 
 /*!
 Destroys a log storage object.

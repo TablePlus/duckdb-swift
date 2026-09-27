@@ -4,13 +4,14 @@
 namespace duckdb {
 
 ExplainStatement::ExplainStatement(unique_ptr<SQLStatement> stmt, ExplainType explain_type,
-                                   const ProfilerPrintFormat &format)
+                                   ExplainFormat explain_format)
     : SQLStatement(StatementType::EXPLAIN_STATEMENT), stmt(std::move(stmt)), explain_type(explain_type),
-      format(format) {
+      explain_format(explain_format) {
 }
 
 ExplainStatement::ExplainStatement(const ExplainStatement &other)
-    : SQLStatement(other), stmt(other.stmt->Copy()), explain_type(other.explain_type), format(other.format) {
+    : SQLStatement(other), stmt(other.stmt->Copy()), explain_type(other.explain_type),
+      explain_format(other.explain_format) {
 }
 
 unique_ptr<SQLStatement> ExplainStatement::Copy() const {
@@ -23,13 +24,13 @@ string ExplainStatement::OptionsToString() const {
 		options += "(";
 		options += "ANALYZE";
 	}
-	if (format != ProfilerPrintFormat::Default()) {
+	if (explain_format != ExplainFormat::DEFAULT) {
 		if (options.empty()) {
 			options += "(";
 		} else {
 			options += ", ";
 		}
-		options += StringUtil::Format("FORMAT %s", StringUtil::Upper(format.ToString()));
+		options += StringUtil::Format("FORMAT %s", EnumUtil::ToString(explain_format));
 	}
 	if (!options.empty()) {
 		options += ")";

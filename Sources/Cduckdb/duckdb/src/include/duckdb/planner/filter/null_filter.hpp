@@ -12,29 +12,33 @@
 
 namespace duckdb {
 
-//! DEPRECATED - only preserved for backwards-compatible deserialization and expression conversion
-class LegacyIsNullFilter : public TableFilter {
+class IsNullFilter : public TableFilter {
 public:
-	static constexpr const TableFilterType TYPE = TableFilterType::LEGACY_IS_NULL;
+	static constexpr const TableFilterType TYPE = TableFilterType::IS_NULL;
 
 public:
-	LegacyIsNullFilter();
+	IsNullFilter();
 
 public:
+	FilterPropagateResult CheckStatistics(BaseStatistics &stats) const override;
+	string ToString(const string &column_name) const override;
+	unique_ptr<TableFilter> Copy() const override;
 	unique_ptr<Expression> ToExpression(const Expression &column) const override;
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<TableFilter> Deserialize(Deserializer &deserializer);
 };
 
-//! DEPRECATED - only preserved for backwards-compatible deserialization and expression conversion
-class LegacyIsNotNullFilter : public TableFilter {
+class IsNotNullFilter : public TableFilter {
 public:
-	static constexpr const TableFilterType TYPE = TableFilterType::LEGACY_IS_NOT_NULL;
+	static constexpr const TableFilterType TYPE = TableFilterType::IS_NOT_NULL;
 
 public:
-	LegacyIsNotNullFilter();
+	IsNotNullFilter();
 
 public:
+	FilterPropagateResult CheckStatistics(BaseStatistics &stats) const override;
+	string ToString(const string &column_name) const override;
+	unique_ptr<TableFilter> Copy() const override;
 	unique_ptr<Expression> ToExpression(const Expression &column) const override;
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<TableFilter> Deserialize(Deserializer &deserializer);

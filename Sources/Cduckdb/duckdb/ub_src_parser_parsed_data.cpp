@@ -1,6 +1,3 @@
-#line 0 "src/parser/parsed_data/alter_database_info.cpp"
-#include "src/parser/parsed_data/alter_database_info.cpp"
-
 #line 0 "src/parser/parsed_data/alter_info.cpp"
 #include "src/parser/parsed_data/alter_info.cpp"
 
@@ -13,17 +10,26 @@
 #line 0 "src/parser/parsed_data/alter_table_info.cpp"
 #include "src/parser/parsed_data/alter_table_info.cpp"
 
+#line 0 "src/parser/parsed_data/alter_database_info.cpp"
+#include "src/parser/parsed_data/alter_database_info.cpp"
+
 #line 0 "src/parser/parsed_data/attach_info.cpp"
 #include "src/parser/parsed_data/attach_info.cpp"
 
 #line 0 "src/parser/parsed_data/comment_on_column_info.cpp"
 #include "src/parser/parsed_data/comment_on_column_info.cpp"
 
-#line 0 "src/parser/parsed_data/connect_info.cpp"
-#include "src/parser/parsed_data/connect_info.cpp"
-
 #line 0 "src/parser/parsed_data/copy_info.cpp"
 #include "src/parser/parsed_data/copy_info.cpp"
+
+#line 0 "src/parser/parsed_data/create_info.cpp"
+#include "src/parser/parsed_data/create_info.cpp"
+
+#line 0 "src/parser/parsed_data/create_function_info.cpp"
+#include "src/parser/parsed_data/create_function_info.cpp"
+
+#line 0 "src/parser/parsed_data/create_index_info.cpp"
+#include "src/parser/parsed_data/create_index_info.cpp"
 
 #line 0 "src/parser/parsed_data/create_aggregate_function_info.cpp"
 #include "src/parser/parsed_data/create_aggregate_function_info.cpp"
@@ -37,26 +43,11 @@
 #line 0 "src/parser/parsed_data/create_copy_function_info.cpp"
 #include "src/parser/parsed_data/create_copy_function_info.cpp"
 
-#line 0 "src/parser/parsed_data/create_function_info.cpp"
-#include "src/parser/parsed_data/create_function_info.cpp"
-
-#line 0 "src/parser/parsed_data/create_index_info.cpp"
-#include "src/parser/parsed_data/create_index_info.cpp"
-
-#line 0 "src/parser/parsed_data/create_info.cpp"
-#include "src/parser/parsed_data/create_info.cpp"
-
 #line 0 "src/parser/parsed_data/create_macro_info.cpp"
 #include "src/parser/parsed_data/create_macro_info.cpp"
 
 #line 0 "src/parser/parsed_data/create_pragma_function_info.cpp"
 #include "src/parser/parsed_data/create_pragma_function_info.cpp"
-
-#line 0 "src/parser/parsed_data/create_scalar_function_info.cpp"
-#include "src/parser/parsed_data/create_scalar_function_info.cpp"
-
-#line 0 "src/parser/parsed_data/create_schema_info.cpp"
-#include "src/parser/parsed_data/create_schema_info.cpp"
 
 #line 0 "src/parser/parsed_data/create_secret_info.cpp"
 #include "src/parser/parsed_data/create_secret_info.cpp"
@@ -64,14 +55,17 @@
 #line 0 "src/parser/parsed_data/create_sequence_info.cpp"
 #include "src/parser/parsed_data/create_sequence_info.cpp"
 
+#line 0 "src/parser/parsed_data/create_schema_info.cpp"
+#include "src/parser/parsed_data/create_schema_info.cpp"
+
+#line 0 "src/parser/parsed_data/create_scalar_function_info.cpp"
+#include "src/parser/parsed_data/create_scalar_function_info.cpp"
+
 #line 0 "src/parser/parsed_data/create_table_function_info.cpp"
 #include "src/parser/parsed_data/create_table_function_info.cpp"
 
 #line 0 "src/parser/parsed_data/create_table_info.cpp"
 #include "src/parser/parsed_data/create_table_info.cpp"
-
-#line 0 "src/parser/parsed_data/create_trigger_info.cpp"
-#include "src/parser/parsed_data/create_trigger_info.cpp"
 
 #line 0 "src/parser/parsed_data/create_type_info.cpp"
 #include "src/parser/parsed_data/create_type_info.cpp"
@@ -79,14 +73,8 @@
 #line 0 "src/parser/parsed_data/create_view_info.cpp"
 #include "src/parser/parsed_data/create_view_info.cpp"
 
-#line 0 "src/parser/parsed_data/create_window_function_info.cpp"
-#include "src/parser/parsed_data/create_window_function_info.cpp"
-
 #line 0 "src/parser/parsed_data/detach_info.cpp"
 #include "src/parser/parsed_data/detach_info.cpp"
-
-#line 0 "src/parser/parsed_data/disconnect_info.cpp"
-#include "src/parser/parsed_data/disconnect_info.cpp"
 
 #line 0 "src/parser/parsed_data/drop_info.cpp"
 #include "src/parser/parsed_data/drop_info.cpp"
@@ -100,17 +88,17 @@
 #line 0 "src/parser/parsed_data/load_info.cpp"
 #include "src/parser/parsed_data/load_info.cpp"
 
-#line 0 "src/parser/parsed_data/parse_info.cpp"
-#include "src/parser/parsed_data/parse_info.cpp"
-
-#line 0 "src/parser/parsed_data/pragma_info.cpp"
-#include "src/parser/parsed_data/pragma_info.cpp"
-
 #line 0 "src/parser/parsed_data/sample_options.cpp"
 #include "src/parser/parsed_data/sample_options.cpp"
 
+#line 0 "src/parser/parsed_data/parse_info.cpp"
+#include "src/parser/parsed_data/parse_info.cpp"
+
 #line 0 "src/parser/parsed_data/transaction_info.cpp"
 #include "src/parser/parsed_data/transaction_info.cpp"
+
+#line 0 "src/parser/parsed_data/pragma_info.cpp"
+#include "src/parser/parsed_data/pragma_info.cpp"
 
 #line 0 "src/parser/parsed_data/vacuum_info.cpp"
 #include "src/parser/parsed_data/vacuum_info.cpp"

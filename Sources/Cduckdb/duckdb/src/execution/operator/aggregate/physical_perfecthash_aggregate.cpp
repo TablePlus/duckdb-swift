@@ -4,8 +4,6 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
-#include "duckdb/common/reference_map.hpp"
-#include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
 
@@ -27,7 +25,7 @@ PhysicalPerfectHashAggregate::PhysicalPerfectHashAggregate(PhysicalPlan &physica
 		group_minima.push_back(NumericStats::Min(nstats));
 	}
 	for (auto &expr : groups) {
-		group_types.push_back(expr->GetReturnType());
+		group_types.push_back(expr->return_type);
 	}
 
 	vector<BoundAggregateExpression *> bindings;
@@ -39,12 +37,12 @@ PhysicalPerfectHashAggregate::PhysicalPerfectHashAggregate(PhysicalPlan &physica
 		bindings.push_back(&aggr);
 
 		D_ASSERT(!aggr.IsDistinct());
-		D_ASSERT(aggr.Function().HasStateCombineCallback());
-		for (auto &child : aggr.GetChildren()) {
-			payload_types.push_back(child->GetReturnType());
+		D_ASSERT(aggr.function.HasStateCombineCallback());
+		for (auto &child : aggr.children) {
+			payload_types.push_back(child->return_type);
 		}
-		if (aggr.GetFilter()) {
-			payload_types_filters.push_back(aggr.GetFilter()->GetReturnType());
+		if (aggr.filter) {
+			payload_types_filters.push_back(aggr.filter->return_type);
 		}
 	}
 	for (const auto &pay_filters : payload_types_filters) {
@@ -56,17 +54,16 @@ PhysicalPerfectHashAggregate::PhysicalPerfectHashAggregate(PhysicalPlan &physica
 	idx_t aggregate_input_idx = 0;
 	for (auto &aggregate : aggregates) {
 		auto &aggr = aggregate->Cast<BoundAggregateExpression>();
-		aggregate_input_idx += aggr.GetChildren().size();
+		aggregate_input_idx += aggr.children.size();
 	}
 	for (auto &aggregate : aggregates) {
 		auto &aggr = aggregate->Cast<BoundAggregateExpression>();
-		if (aggr.GetFilter()) {
-			auto &filter_ref = *aggr.GetFilter();
-			auto &bound_ref_expr = filter_ref.Cast<BoundReferenceExpression>();
-			auto it = filter_indexes.find(filter_ref);
+		if (aggr.filter) {
+			auto &bound_ref_expr = aggr.filter->Cast<BoundReferenceExpression>();
+			auto it = filter_indexes.find(aggr.filter.get());
 			if (it == filter_indexes.end()) {
-				filter_indexes[filter_ref] = bound_ref_expr.Index();
-				bound_ref_expr.IndexMutable() = aggregate_input_idx++;
+				filter_indexes[aggr.filter.get()] = bound_ref_expr.index;
+				bound_ref_expr.index = aggregate_input_idx++;
 			} else {
 				++aggregate_input_idx;
 			}
@@ -129,28 +126,32 @@ SinkResultType PhysicalPerfectHashAggregate::Sink(ExecutionContext &context, Dat
 		auto &group = groups[group_idx];
 		D_ASSERT(group->GetExpressionType() == ExpressionType::BOUND_REF);
 		auto &bound_ref_expr = group->Cast<BoundReferenceExpression>();
-		group_chunk.data[group_idx].Reference(chunk.data[bound_ref_expr.Index()]);
+		group_chunk.data[group_idx].Reference(chunk.data[bound_ref_expr.index]);
 	}
 	idx_t aggregate_input_idx = 0;
 	for (auto &aggregate : aggregates) {
 		auto &aggr = aggregate->Cast<BoundAggregateExpression>();
-		for (auto &child_expr : aggr.GetChildren()) {
+		for (auto &child_expr : aggr.children) {
 			D_ASSERT(child_expr->GetExpressionType() == ExpressionType::BOUND_REF);
 			auto &bound_ref_expr = child_expr->Cast<BoundReferenceExpression>();
-			aggregate_input_chunk.data[aggregate_input_idx++].Reference(chunk.data[bound_ref_expr.Index()]);
+			aggregate_input_chunk.data[aggregate_input_idx++].Reference(chunk.data[bound_ref_expr.index]);
 		}
 	}
 	for (auto &aggregate : aggregates) {
 		auto &aggr = aggregate->Cast<BoundAggregateExpression>();
-		if (aggr.GetFilter()) {
-			auto it = filter_indexes.find(*aggr.GetFilter());
+		if (aggr.filter) {
+			auto it = filter_indexes.find(aggr.filter.get());
 			D_ASSERT(it != filter_indexes.end());
 			aggregate_input_chunk.data[aggregate_input_idx++].Reference(chunk.data[it->second]);
 		}
 	}
 
-	group_chunk.Verify(context.client.db);
-	aggregate_input_chunk.Verify(context.client.db);
+	group_chunk.SetCardinality(chunk.size());
+
+	aggregate_input_chunk.SetCardinality(chunk.size());
+
+	group_chunk.Verify();
+	aggregate_input_chunk.Verify();
 	D_ASSERT(aggregate_input_chunk.ColumnCount() == 0 || group_chunk.size() == aggregate_input_chunk.size());
 
 	lstate.ht->AddChunk(group_chunk, aggregate_input_chunk);
@@ -219,12 +220,11 @@ InsertionOrderPreservingMap<string> PhysicalPerfectHashAggregate::ParamsToString
 		}
 		aggregate_info += aggregates[i]->GetName();
 		auto &aggregate = aggregates[i]->Cast<BoundAggregateExpression>();
-		if (aggregate.GetFilter()) {
-			aggregate_info += " Filter: " + aggregate.GetFilter()->GetName();
+		if (aggregate.filter) {
+			aggregate_info += " Filter: " + aggregate.filter->GetName();
 		}
 	}
 	result["Aggregates"] = aggregate_info;
-	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }
 

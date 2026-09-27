@@ -24,8 +24,6 @@ struct BuildSize {
 	}
 };
 
-enum class RecursiveProbeSidePreference : uint8_t { NONE, KEEP, SWAP };
-
 class BuildProbeSideOptimizer : LogicalOperatorVisitor {
 private:
 	static constexpr idx_t COLUMN_COUNT_PENALTY = 2;
@@ -39,9 +37,6 @@ public:
 private:
 	bool TryFlipJoinChildren(LogicalOperator &op) const;
 	static idx_t ChildHasJoins(LogicalOperator &op);
-	bool ContainsActiveRecursiveReference(const LogicalOperator &op) const;
-	bool ContainsCorrelationSensitiveOperators(const LogicalOperator &op) const;
-	RecursiveProbeSidePreference GetRecursiveProbeSidePreference(const LogicalOperator &op) const;
 
 	static BuildSize GetBuildSizes(const LogicalOperator &op, idx_t lhs_cardinality, idx_t rhs_cardinality);
 	static double GetBuildSize(vector<LogicalType> types, idx_t cardinality);
@@ -49,7 +44,6 @@ private:
 private:
 	ClientContext &context;
 	vector<ColumnBinding> preferred_on_probe_side;
-	vector<TableIndex> active_recursive_cte_indexes;
 };
 
 } // namespace duckdb

@@ -98,7 +98,6 @@ SourceResultType PhysicalReservoirSample::GetDataInternal(ExecutionContext &cont
 InsertionOrderPreservingMap<string> PhysicalReservoirSample::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Sample Size"] = options->sample_size.ToString() + (options->is_percentage ? "%" : " rows");
-	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }
 

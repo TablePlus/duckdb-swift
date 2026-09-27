@@ -30,7 +30,8 @@ void DuckDBApproxDatabaseCountFunction(ClientContext &context, TableFunctionInpu
 	if (data.finished) {
 		return;
 	}
-	output.data[0].Append(Value::UBIGINT(data.count));
+	output.SetValue(0, 0, Value::UBIGINT(data.count));
+	output.SetCardinality(1);
 	data.finished = true;
 }
 

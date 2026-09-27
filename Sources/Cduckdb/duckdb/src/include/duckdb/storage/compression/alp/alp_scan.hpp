@@ -63,11 +63,11 @@ public:
 	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
 
 	explicit AlpScanState(ColumnSegment &segment) : segment(segment), count(segment.count) {
-		auto &buffer_manager = BufferManager::GetBufferManager(segment.GetDatabase());
-		handle = buffer_manager.Pin(segment.GetBlockHandle());
+		auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
+		handle = buffer_manager.Pin(segment.block);
 		// ScanStates never exceed the boundaries of a Segment,
 		// but are not guaranteed to start at the beginning of the Block
-		segment_data = handle.GetDataMutable() + segment.GetBlockOffset();
+		segment_data = handle.Ptr() + segment.GetBlockOffset();
 		auto metadata_offset = Load<uint32_t>(segment_data);
 		metadata_ptr = segment_data + metadata_offset;
 	}
@@ -215,6 +215,14 @@ public:
 			memcpy(vector_state.exceptions_positions, (void *)vector_ptr, exceptions_positions_copy_size);
 			vector_ptr += exceptions_positions_copy_size;
 			read_bytes += exceptions_positions_copy_size;
+
+			//! The exception positions index into the decoded vector, so they must stay within its bounds
+			for (idx_t i = 0; i < vector_state.exceptions_count; i++) {
+				if (vector_state.exceptions_positions[i] >= vector_size) {
+					throw IOException("Corrupted ALP segment: exception position (%d) exceeds vector_size (%d)",
+					                  vector_state.exceptions_positions[i], vector_size);
+				}
+			}
 		}
 
 		// Decode all the vector values to the specified 'value_buffer'
@@ -262,7 +270,7 @@ void AlpScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t scan_c
 	auto &scan_state = (AlpScanState<T> &)*state.scan_state;
 
 	// Get the pointer to the result values
-	auto current_result_ptr = FlatVector::GetDataMutable<T>(result);
+	auto current_result_ptr = FlatVector::GetData<T>(result);
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	current_result_ptr += result_offset;
 

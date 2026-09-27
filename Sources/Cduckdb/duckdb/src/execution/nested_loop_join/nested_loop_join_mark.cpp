@@ -1,6 +1,4 @@
 #include "duckdb/common/operator/comparison_operators.hpp"
-#include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/uhugeint.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/nested_loop_join.hpp"
@@ -8,28 +6,31 @@
 namespace duckdb {
 
 template <class T, class OP>
-static void TemplatedMarkJoin(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount, bool found_match[]) {
+static void TemplatedMarkJoin(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[]) {
 	using MATCH_OP = ComparisonOperationWrapper<OP>;
 
-	auto left_entries = left.Values<T>();
-	auto right_entries = right.Values<T>();
+	UnifiedVectorFormat left_data, right_data;
+	left.ToUnifiedFormat(lcount, left_data);
+	right.ToUnifiedFormat(rcount, right_data);
+
+	auto ldata = UnifiedVectorFormat::GetData<T>(left_data);
+	auto rdata = UnifiedVectorFormat::GetData<T>(right_data);
 	for (idx_t i = 0; i < lcount; i++) {
 		if (found_match[i]) {
 			continue;
 		}
-		auto left_entry = left_entries[i];
-		const auto left_null = !left_entry.IsValid();
+		auto lidx = left_data.sel->get_index(i);
+		const auto left_null = !left_data.validity.RowIsValid(lidx);
 		if (!MATCH_OP::COMPARE_NULL && left_null) {
 			continue;
 		}
 		for (idx_t j = 0; j < rcount; j++) {
-			auto right_entry = right_entries[j];
-			const auto right_null = !right_entry.IsValid();
+			auto ridx = right_data.sel->get_index(j);
+			const auto right_null = !right_data.validity.RowIsValid(ridx);
 			if (!MATCH_OP::COMPARE_NULL && right_null) {
 				continue;
 			}
-			if (MATCH_OP::template Operation<T>(left_entries.GetValueUnsafe(i), right_entries.GetValueUnsafe(j),
-			                                    left_null, right_null)) {
+			if (MATCH_OP::template Operation<T>(ldata[lidx], rdata[ridx], left_null, right_null)) {
 				found_match[i] = true;
 				break;
 			}
@@ -37,14 +38,14 @@ static void TemplatedMarkJoin(const Vector &left, const Vector &right, idx_t lco
 	}
 }
 
-static void MarkJoinNested(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
+static void MarkJoinNested(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
                            ExpressionType comparison_type) {
 	Vector left_reference(left.GetType());
 	for (idx_t i = 0; i < lcount; i++) {
 		if (found_match[i]) {
 			continue;
 		}
-		ConstantVector::Reference(left_reference, count_t(rcount), left, i, lcount);
+		ConstantVector::Reference(left_reference, left, i, rcount);
 		idx_t count;
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_EQUAL:
@@ -81,7 +82,7 @@ static void MarkJoinNested(const Vector &left, const Vector &right, idx_t lcount
 }
 
 template <class OP>
-static void MarkJoinSwitch(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount, bool found_match[]) {
+static void MarkJoinSwitch(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[]) {
 	switch (left.GetType().InternalType()) {
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
@@ -115,8 +116,8 @@ static void MarkJoinSwitch(const Vector &left, const Vector &right, idx_t lcount
 	}
 }
 
-static void MarkJoinComparisonSwitch(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount,
-                                     bool found_match[], ExpressionType comparison_type) {
+static void MarkJoinComparisonSwitch(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
+                                     ExpressionType comparison_type) {
 	switch (left.GetType().InternalType()) {
 	case PhysicalType::STRUCT:
 	case PhysicalType::LIST:
@@ -159,7 +160,7 @@ void NestedLoopJoinMark::Perform(DataChunk &left, ColumnDataCollection &right, b
 	while (right.Scan(scan_state, scan_chunk)) {
 		for (idx_t i = 0; i < conditions.size(); i++) {
 			MarkJoinComparisonSwitch(left.data[i], scan_chunk.data[i], left.size(), scan_chunk.size(), found_match,
-			                         conditions[i].GetComparisonType());
+			                         conditions[i].comparison);
 		}
 	}
 }

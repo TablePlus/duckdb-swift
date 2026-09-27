@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/types/interval.hpp"
 
 namespace duckdb {
 
@@ -28,8 +27,7 @@ struct NumericValueUnion {
 		uhugeint_t uhugeint;
 		float float_;   // NOLINT
 		double double_; // NOLINT
-		interval_t interval;
-	} value_; // NOLINT
+	} value_;           // NOLINT
 
 	template <class T>
 	T &GetReferenceUnsafe();
@@ -98,11 +96,6 @@ DUCKDB_API inline float &NumericValueUnion::GetReferenceUnsafe() {
 template <>
 DUCKDB_API inline double &NumericValueUnion::GetReferenceUnsafe() {
 	return value_.double_;
-}
-
-template <>
-DUCKDB_API inline interval_t &NumericValueUnion::GetReferenceUnsafe() {
-	return value_.interval;
 }
 
 } // namespace duckdb

@@ -8,28 +8,25 @@
 
 namespace duckdb {
 
-CreateViewInfo::CreateViewInfo() : CreateInfo(CatalogType::VIEW_ENTRY, Identifier::InvalidSchema()) {
+CreateViewInfo::CreateViewInfo() : CreateInfo(CatalogType::VIEW_ENTRY, INVALID_SCHEMA) {
 }
-CreateViewInfo::CreateViewInfo(const QualifiedName &view_name)
-    : CreateInfo(CatalogType::VIEW_ENTRY, view_name.Schema(), view_name.Catalog()) {
-	SetViewName(view_name.Name());
+CreateViewInfo::CreateViewInfo(string catalog_p, string schema_p, string view_name_p)
+    : CreateInfo(CatalogType::VIEW_ENTRY, std::move(schema_p), std::move(catalog_p)),
+      view_name(std::move(view_name_p)) {
 }
 
-CreateViewInfo::CreateViewInfo(SchemaCatalogEntry &schema, Identifier view_name)
-    : CreateViewInfo(QualifiedName(schema.catalog.GetName(), schema.name, std::move(view_name))) {
+CreateViewInfo::CreateViewInfo(SchemaCatalogEntry &schema, string view_name)
+    : CreateViewInfo(schema.catalog.GetName(), schema.name, std::move(view_name)) {
 }
 
 string CreateViewInfo::ToString() const {
 	string result = GetCreatePrefix("VIEW");
-	result += QualifiedNameToString();
+	result += QualifierToString(temporary ? "" : catalog, schema, view_name);
 	if (!aliases.empty()) {
 		result += " (";
-		result +=
-		    StringUtil::Join(aliases, aliases.size(), ", ", [](const Identifier &name) { return SQLIdentifier(name); });
+		result += StringUtil::Join(aliases, aliases.size(), ", ",
+		                           [](const string &name) { return KeywordHelper::WriteOptionallyQuoted(name); });
 		result += ")";
-	}
-	if (binding_mode == CreateViewBindingMode::SKIP_BINDING) {
-		result += " WITH (DEFER_BINDING)";
 	}
 	result += " AS ";
 	result += query->ToString();
@@ -38,13 +35,12 @@ string CreateViewInfo::ToString() const {
 }
 
 unique_ptr<CreateInfo> CreateViewInfo::Copy() const {
-	auto result = make_uniq<CreateViewInfo>(GetQualifiedName());
+	auto result = make_uniq<CreateViewInfo>(catalog, schema, view_name);
 	CopyProperties(*result);
 	result->aliases = aliases;
 	result->types = types;
 	result->names = names;
 	result->column_comments_map = column_comments_map;
-	result->binding_mode = binding_mode;
 	result->query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
 	return std::move(result);
 }
@@ -63,7 +59,7 @@ unique_ptr<SelectStatement> CreateViewInfo::ParseSelect(const string &sql) {
 
 unique_ptr<CreateViewInfo> CreateViewInfo::FromSelect(ClientContext &context, unique_ptr<CreateViewInfo> info) {
 	D_ASSERT(info);
-	D_ASSERT(!info->GetViewName().empty());
+	D_ASSERT(!info->view_name.empty());
 	D_ASSERT(!info->sql.empty());
 	D_ASSERT(!info->query);
 
@@ -91,8 +87,8 @@ unique_ptr<CreateViewInfo> CreateViewInfo::FromCreateView(ClientContext &context
 	}
 
 	auto result = unique_ptr_cast<CreateInfo, CreateViewInfo>(std::move(create_statement.info));
-	result->SetQualifiedName(
-	    QualifiedName(schema.ParentCatalog().GetName(), schema.name, result->GetQualifiedName().Name()));
+	result->catalog = schema.ParentCatalog().GetName();
+	result->schema = schema.name;
 
 	auto view_binder = Binder::CreateBinder(context);
 	view_binder->BindCreateViewInfo(*result);
@@ -111,20 +107,20 @@ vector<Value> CreateViewInfo::GetColumnCommentsList() const {
 	vector<Value> result;
 	result.resize(names.size());
 	for (auto &entry : column_comments_map) {
-		auto it = std::find_if(names.begin(), names.end(), [&](const Identifier &n) { return entry.first == n; });
+		auto it = std::find(names.begin(), names.end(), entry.first);
 		if (it == names.end()) {
 			throw InternalException(
-			    "While serializing comments for view \"%s\" - did not find column \"%s\" in list of names",
-			    GetViewName(), entry.first.GetIdentifierName());
+			    "While serializing comments for view \"%s\" - did not find column \"%s\" in list of names", view_name,
+			    entry.first);
 		}
 		result[NumericCast<idx_t>(it - names.begin())] = entry.second;
 	}
 	return result;
 }
 
-CreateViewInfo::CreateViewInfo(vector<Identifier> names_p, vector<Value> comments,
-                               identifier_map_t<Value> column_comments_p)
-    : CreateInfo(CatalogType::VIEW_ENTRY, Identifier::InvalidSchema()), names(std::move(names_p)),
+CreateViewInfo::CreateViewInfo(vector<string> names_p, vector<Value> comments,
+                               unordered_map<string, Value> column_comments_p)
+    : CreateInfo(CatalogType::VIEW_ENTRY, INVALID_SCHEMA), names(std::move(names_p)),
       column_comments_map(std::move(column_comments_p)) {
 	if (comments.empty()) {
 		return;

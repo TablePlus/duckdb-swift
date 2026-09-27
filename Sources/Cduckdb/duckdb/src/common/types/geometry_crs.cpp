@@ -6,9 +6,8 @@
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/helper.hpp"
-#include "duckdb/catalog/catalog.hpp"
 
-#include "duckdb/common/json_document.hpp"
+#include "yyjson.hpp"
 #include "duckdb/catalog/catalog_entry/coordinate_system_catalog_entry.hpp"
 #include "fast_float/fast_float.h"
 
@@ -156,10 +155,10 @@ private:
 	bool TryMatchText(string &result) {
 		const auto start = pos;
 		// First character must be alphabetic or underscore
-		if (pos < end && (StringUtil::CharacterIsAlpha(*pos) || *pos == '_')) {
+		if (pos < end && (isalpha(*pos) || *pos == '_')) {
 			pos++;
 			// Subsequent characters can also include digits
-			while (pos < end && (StringUtil::CharacterIsAlphaNumeric(*pos) || *pos == '_')) {
+			while (pos < end && (isalnum(*pos) || *pos == '_')) {
 				pos++;
 			}
 		}
@@ -286,7 +285,7 @@ private:
 	}
 
 	void SkipWhitespace() {
-		while (pos < end && StringUtil::CharacterIsSpace(*pos)) {
+		while (pos < end && isspace(*pos)) {
 			pos++;
 		}
 	}
@@ -458,28 +457,31 @@ bool CoordinateReferenceSystem::TryParseWKT2(const string &text, CoordinateRefer
 // PROJJSON Parsing
 //----------------------------------------------------------------------------------------------------------------------
 bool CoordinateReferenceSystem::TryParsePROJJSON(const string &text, CoordinateReferenceSystem &result) {
-	JSONParseError error;
-	auto doc = JSONDocument::TryParse(text.c_str(), text.size(), error);
+	using namespace duckdb_yyjson; // NOLINT
+
+	unique_ptr<yyjson_doc, void (*)(yyjson_doc *)> doc(yyjson_read(text.c_str(), text.size(), YYJSON_READ_NOFLAG),
+	                                                   yyjson_doc_free);
+
 	if (!doc) {
 		// Not a valid JSON
 		return false;
 	}
 
-	auto root = doc->GetRoot();
-	if (!root.IsObject()) {
+	yyjson_val *root = yyjson_doc_get_root(doc.get());
+	if (!root || !yyjson_is_obj(root)) {
 		// The root is not an object
 		return false;
 	}
 
 	// Get the "type" field from the root object
-	auto type_val = root.GetMember("type");
-	if (!type_val.IsString()) {
+	yyjson_val *type_val = yyjson_obj_get(root, "type");
+	if (!type_val || !yyjson_is_str(type_val)) {
 		return false;
 	}
 
 	// Check that the type is one of the PROJJSON CRS types
 	// There are other (derived CRS) types, but they can not be used as root CRS definitions
-	const string type_str = type_val.GetString();
+	const string type_str = yyjson_get_str(type_val);
 	const auto projjson_crs_types = {"GeographicCRS", "GeodeticCRS",    "ProjectedCRS", "CompoundCRS",  "BoundCRS",
 	                                 "VerticalCRS",   "EngineeringCRS", "TemporalCRS",  "ParametricCRS"};
 
@@ -496,12 +498,12 @@ bool CoordinateReferenceSystem::TryParsePROJJSON(const string &text, CoordinateR
 	}
 
 	// Start out with the root object
-	auto target_val = root;
+	yyjson_val *target_val = root;
 
 	// Special case for BoundCRS, use the name of the transformation instead
 	if (StringUtil::CIEquals(type_str, "BoundCRS")) {
-		auto trans_val = root.GetMember("transformation");
-		if (!trans_val.IsObject()) {
+		const auto trans_val = yyjson_obj_get(root, "transformation");
+		if (!trans_val || !yyjson_is_obj(trans_val)) {
 			return false;
 		}
 
@@ -510,24 +512,35 @@ bool CoordinateReferenceSystem::TryParsePROJJSON(const string &text, CoordinateR
 	}
 
 	// Try to get the "name" field from the target object
-	auto name_val = target_val.GetMember("name");
-	if (name_val.IsString()) {
-		result.identifier = name_val.GetString();
+	yyjson_val *name_val = yyjson_obj_get(target_val, "name");
+	if (name_val && yyjson_is_str(name_val)) {
+		const char *name_str = yyjson_get_str(name_val);
+		if (name_str) {
+			result.identifier = string(name_str);
+		}
 	}
 
 	// Try to get the "id" field from the target object
-	auto id_val = target_val.GetMember("id");
-	if (id_val.IsObject()) {
-		auto auth_val = id_val.GetMember("authority");
-		if (auth_val.IsString()) {
-			result.identifier = auth_val.GetString();
+	yyjson_val *id_val = yyjson_obj_get(target_val, "id");
+	if (id_val && yyjson_is_obj(id_val)) {
+		const auto auth_val = yyjson_obj_get(id_val, "authority");
+		if (auth_val && yyjson_is_str(auth_val)) {
+			const auto auth_str = yyjson_get_str(auth_val);
 
-			auto code_val = id_val.GetMember("code");
-			if (code_val.IsInteger()) {
-				result.identifier += ":" + StringUtil::Format("%d", code_val.GetSignedInteger());
-			}
-			if (code_val.IsString()) {
-				result.identifier += ":" + code_val.GetString();
+			if (auth_str) {
+				result.identifier = string(auth_str);
+
+				const auto code_val = yyjson_obj_get(id_val, "code");
+				if (code_val && yyjson_is_int(code_val)) {
+					const auto code_int = yyjson_get_int(code_val);
+					result.identifier += ":" + StringUtil::Format("%d", code_int);
+				}
+				if (code_val && yyjson_is_str(code_val)) {
+					const auto code_str = yyjson_get_str(code_val);
+					if (code_str) {
+						result.identifier += ":" + string(code_str);
+					}
+				}
 			}
 		}
 	}
@@ -536,7 +549,14 @@ bool CoordinateReferenceSystem::TryParsePROJJSON(const string &text, CoordinateR
 
 	// Print the PROJJSON back to a string to normalize it
 	// TODO: We should actually normalize the PROJJSON here (e.g. sort fields) to ensure consistent equality checks
-	result.definition = doc->ToString(JSONWriteFlags::NONE);
+	size_t json_size = 0;
+	const auto json_text = yyjson_write(doc.get(), YYJSON_WRITE_NOFLAG, &json_size);
+	if (!json_text) {
+		return false;
+	}
+
+	result.definition = string(json_text, json_size);
+	free(json_text);
 
 	return true;
 }
@@ -665,8 +685,8 @@ unique_ptr<CoordinateReferenceSystem> CoordinateReferenceSystem::TryConvert(Clie
 	}
 
 	auto &catalog = Catalog::GetSystemCatalog(context);
-	auto entry = catalog.GetEntry(context, CatalogType::COORDINATE_SYSTEM_ENTRY, Identifier::DefaultSchema(),
-	                              Identifier(source_crs.GetIdentifier()), OnEntryNotFound::RETURN_NULL);
+	auto entry = catalog.GetEntry(context, CatalogType::COORDINATE_SYSTEM_ENTRY, DEFAULT_SCHEMA,
+	                              source_crs.GetIdentifier(), OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		return nullptr;
 	}
@@ -681,7 +701,7 @@ unique_ptr<CoordinateReferenceSystem> CoordinateReferenceSystem::TryConvert(Clie
 		return make_uniq<CoordinateReferenceSystem>(crs_entry.authority + ":" + crs_entry.code);
 	}
 	case CoordinateReferenceSystemType::SRID: {
-		return make_uniq<CoordinateReferenceSystem>(crs_entry.name.GetIdentifierName());
+		return make_uniq<CoordinateReferenceSystem>(crs_entry.name);
 	}
 	case CoordinateReferenceSystemType::PROJJSON: {
 		if (crs_entry.projjson_definition.empty()) {

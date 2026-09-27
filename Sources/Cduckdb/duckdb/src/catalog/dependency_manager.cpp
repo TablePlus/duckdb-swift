@@ -15,7 +15,6 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/parser/constraints/foreign_key_constraint.hpp"
 #include "duckdb/catalog/dependency_catalog_set.hpp"
-#include "duckdb/parser/qualified_name.hpp"
 
 #include "duckdb/common/printer.hpp"
 
@@ -33,54 +32,26 @@ static void AssertMangledName(const string &mangled_name, idx_t expected_null_by
 
 MangledEntryName::MangledEntryName(const CatalogEntryInfo &info) {
 	auto &type = info.type;
-	auto &schema_path = info.schema_path;
+	auto &schema = info.schema;
 	auto &name = info.name;
 
-	// Format: Type\0[Schema\0 for each containing schema]Name - the schema path is null-separated so distinct nestings
-	// produce distinct keys (SQL identifiers cannot contain null bytes)
-	string mangled = CatalogTypeToString(type) + '\0';
-	for (auto &schema : schema_path) {
-		mangled += schema.GetIdentifierName() + '\0';
-	}
-	mangled += name;
-	this->name = Identifier(mangled);
-	AssertMangledName(this->name.GetIdentifierName(), 1 + schema_path.size());
+	this->name = CatalogTypeToString(type) + '\0' + schema + '\0' + name;
+	AssertMangledName(this->name, 2);
 }
 
 MangledDependencyName::MangledDependencyName(const MangledEntryName &from, const MangledEntryName &to) {
-	this->name = Identifier(from.name + '\0' + to.name);
-#ifdef DEBUG
-	auto count_nulls = [](const Identifier &id) {
-		idx_t count = 0;
-		for (auto ch : id.GetIdentifierName()) {
-			count += ch == '\0';
-		}
-		return count;
-	};
-	// the two mangled entry names (each Type\0[Schema\0...]Name) joined by a separator null byte
-	AssertMangledName(this->name.GetIdentifierName(), count_nulls(from.name) + count_nulls(to.name) + 1);
-#endif
+	this->name = from.name + '\0' + to.name;
+	AssertMangledName(this->name, 5);
 }
 
 DependencyManager::DependencyManager(DuckCatalog &catalog) : catalog(catalog), subjects(catalog), dependents(catalog) {
 }
 
-vector<Identifier> DependencyManager::GetSchemaPath(const CatalogEntry &entry) {
-	// the path of (nested) schemas that contain this entry, outermost first - the parent chain for a schema entry, or
-	// the containing schema's full path for any other entry. This is uniform across entry types: no special-casing.
-	optional_ptr<const SchemaCatalogEntry> schema;
+string DependencyManager::GetSchema(const CatalogEntry &entry) {
 	if (entry.type == CatalogType::SCHEMA_ENTRY) {
-		schema = entry.Cast<SchemaCatalogEntry>().GetParentSchema().get();
-	} else {
-		schema = entry.ParentSchema();
+		return entry.name;
 	}
-	vector<Identifier> path;
-	while (schema) {
-		path.push_back(schema->name);
-		schema = schema->GetParentSchema().get();
-	}
-	std::reverse(path.begin(), path.end());
-	return path;
+	return entry.ParentSchema().name;
 }
 
 MangledEntryName DependencyManager::MangleName(const CatalogEntryInfo &info) {
@@ -92,7 +63,10 @@ MangledEntryName DependencyManager::MangleName(const CatalogEntry &entry) {
 		auto &dependency_entry = entry.Cast<DependencyEntry>();
 		return dependency_entry.EntryMangledName();
 	}
-	CatalogEntryInfo info {entry.type, GetSchemaPath(entry), entry.name};
+	auto type = entry.type;
+	auto schema = GetSchema(entry);
+	auto name = entry.name;
+	CatalogEntryInfo info {type, schema, name};
 
 	return MangleName(info);
 }
@@ -245,9 +219,17 @@ void DependencyManager::CreateDependent(CatalogTransaction transaction, const De
 	set.CreateEntry(transaction, entry_name, std::move(dep));
 }
 
+static string CatalogEntryInfoToString(const CatalogEntryInfo &entry) {
+	return KeywordHelper::WriteOptionallyQuoted(entry.schema) + "." + KeywordHelper::WriteOptionallyQuoted(entry.name) +
+	       StringUtil::Format("(%s)", CatalogTypeToString(entry.type));
+}
+
 void DependencyManager::CreateDependency(CatalogTransaction transaction, DependencyInfo &info) {
 	auto subject_entry = LookupEntry(transaction, info.subject.entry);
 	info.subject.oid = subject_entry ? subject_entry->oid : optional_idx();
+	if (!subject_entry) {
+		throw InternalException("Couldn't locate entry: '%s'", CatalogEntryInfoToString(info.subject.entry));
+	}
 
 	DependencyCatalogSet subjects(Subjects(), info.dependent.entry);
 	DependencyCatalogSet dependents(Dependents(), info.subject.entry);
@@ -306,9 +288,8 @@ void DependencyManager::CreateDependencies(CatalogTransaction transaction, const
 
 	// add the object to the dependents_map of each object that it depends on
 	for (auto &dependency : dependencies.Set()) {
-		DependencyInfo info {
-		    /*dependent = */ DependencyDependent {GetLookupProperties(object), dependency_flags},
-		    /*subject = */ DependencySubject {dependency.entry, DependencySubjectFlags(), optional_idx()}};
+		DependencyInfo info {/*dependent = */ DependencyDependent {GetLookupProperties(object), dependency_flags},
+		                     /*subject = */ DependencySubject {dependency.entry, DependencySubjectFlags()}};
 		CreateDependency(transaction, info);
 	}
 }
@@ -337,44 +318,27 @@ CatalogEntryInfo DependencyManager::GetLookupProperties(const CatalogEntry &entr
 	if (entry.type == CatalogType::DEPENDENCY_ENTRY) {
 		auto &dependency_entry = entry.Cast<DependencyEntry>();
 		return dependency_entry.EntryInfo();
+	} else {
+		auto schema = DependencyManager::GetSchema(entry);
+		auto &name = entry.name;
+		auto &type = entry.type;
+		return CatalogEntryInfo {type, schema, name};
 	}
-	return CatalogEntryInfo {entry.type, GetSchemaPath(entry), entry.name};
-}
-
-optional_ptr<SchemaCatalogEntry> DependencyManager::NavigateSchemaPath(CatalogTransaction transaction,
-                                                                       const vector<Identifier> &schema_path) {
-	optional_ptr<SchemaCatalogEntry> schema;
-	reference<CatalogSet> current = catalog.GetSchemaCatalogSet();
-	for (auto &component : schema_path) {
-		auto entry = current.get().GetEntry(transaction, component);
-		if (!entry) {
-			return nullptr;
-		}
-		schema = entry->Cast<SchemaCatalogEntry>();
-		current = schema->Cast<DuckSchemaEntry>().GetCatalogSet(CatalogType::SCHEMA_ENTRY);
-	}
-	return schema;
 }
 
 optional_ptr<CatalogEntry> DependencyManager::LookupEntry(CatalogTransaction transaction,
                                                           const CatalogEntryInfo &info) {
 	auto &type = info.type;
-	auto &schema_path = info.schema_path;
+	auto &schema = info.schema;
 	auto &name = info.name;
 
-	// navigate the (possibly nested) schema path to the schema that directly contains the entry
-	auto schema = NavigateSchemaPath(transaction, schema_path);
-	if (type == CatalogType::SCHEMA_ENTRY) {
-		// the entry is itself a schema: it lives in the deepest schema's nested-schema set, or the catalog root when
-		// the path is empty (a top-level schema)
-		auto &container = schema ? schema->Cast<DuckSchemaEntry>().GetCatalogSet(CatalogType::SCHEMA_ENTRY)
-		                         : catalog.GetSchemaCatalogSet();
-		return container.GetEntry(transaction, name);
+	// Lookup the schema
+	auto schema_entry = catalog.GetSchema(transaction, schema, OnEntryNotFound::RETURN_NULL);
+	if (type == CatalogType::SCHEMA_ENTRY || !schema_entry) {
+		// This is a schema entry, perform the callback only providing the schema
+		return reinterpret_cast<CatalogEntry *>(schema_entry.get());
 	}
-	if (!schema) {
-		return nullptr;
-	}
-	return schema->GetEntry(transaction, type, name);
+	return schema_entry->GetEntry(transaction, type, name);
 }
 
 optional_ptr<CatalogEntry> DependencyManager::LookupEntry(CatalogTransaction transaction, CatalogEntry &dependency) {
@@ -416,7 +380,7 @@ static string EntryToString(CatalogEntryInfo &info) {
 		return StringUtil::Format("index \"%s\"", info.name);
 	}
 	case CatalogType::SEQUENCE_ENTRY: {
-		return StringUtil::Format("sequence \"%s\"", info.name);
+		return StringUtil::Format("index \"%s\"", info.name);
 	}
 	case CatalogType::COLLATION_ENTRY: {
 		return StringUtil::Format("collation \"%s\"", info.name);
@@ -456,9 +420,6 @@ static string EntryToString(CatalogEntryInfo &info) {
 	}
 	case CatalogType::SECRET_FUNCTION_ENTRY: {
 		return StringUtil::Format("secret function \"%s\"", info.name);
-	}
-	case CatalogType::TRIGGER_ENTRY: {
-		return StringUtil::Format("trigger \"%s\"", info.name);
 	}
 	default:
 		throw InternalException("CatalogType not handled in EntryToString (DependencyManager) for %s",
@@ -501,19 +462,19 @@ void DependencyManager::VerifyExistence(CatalogTransaction transaction, Dependen
 	}
 
 	auto &type = info.type;
-	auto &schema_path = info.schema_path;
+	auto &schema = info.schema;
 	auto &name = info.name;
 
-	// navigate the (possibly nested) schema path to the schema that directly contains the subject
-	auto schema = NavigateSchemaPath(transaction, schema_path);
+	auto &duck_catalog = catalog.Cast<DuckCatalog>();
+	auto &schema_catalog_set = duck_catalog.GetSchemaCatalogSet();
+
 	CatalogSet::EntryLookup lookup_result;
-	if (type == CatalogType::SCHEMA_ENTRY) {
-		auto &container = schema ? schema->Cast<DuckSchemaEntry>().GetCatalogSet(CatalogType::SCHEMA_ENTRY)
-		                         : catalog.GetSchemaCatalogSet();
-		lookup_result = container.GetEntryDetailed(transaction, name);
-	} else if (schema) {
-		EntryLookupInfo lookup_info(type, QualifiedName(name));
-		lookup_result = schema->LookupEntryDetailed(transaction, lookup_info);
+	lookup_result = schema_catalog_set.GetEntryDetailed(transaction, schema);
+
+	if (type != CatalogType::SCHEMA_ENTRY && lookup_result.result) {
+		auto &schema_entry = lookup_result.result->Cast<SchemaCatalogEntry>();
+		EntryLookupInfo lookup_info(type, name);
+		lookup_result = schema_entry.LookupEntryDetailed(transaction, lookup_info);
 	}
 
 	if (lookup_result.reason == CatalogSet::EntryLookup::FailureReason::DELETED) {
@@ -579,7 +540,8 @@ catalog_entry_set_t DependencyManager::CheckDropDependencies(CatalogTransaction 
 	auto info = GetLookupProperties(object);
 	// Look through all the objects that depend on the 'object'
 	ScanDependents(transaction, info, [&](DependencyEntry &dep) {
-		// a nested schema depends on its parent schema; other schemas have no dependencies
+		// It makes no sense to have a schema depend on anything
+		D_ASSERT(dep.EntryInfo().type != CatalogType::SCHEMA_ENTRY);
 		auto entry = LookupEntry(transaction, dep);
 		if (!entry) {
 			return;
@@ -752,7 +714,7 @@ void DependencyManager::AlterObject(CatalogTransaction transaction, CatalogEntry
 		dependencies.emplace_back(dep_info);
 	});
 
-	if (has_new_dependencies || !(old_obj.name == new_obj.name)) {
+	if (has_new_dependencies || !StringUtil::CIEquals(old_obj.name, new_obj.name)) {
 		// The dependencies have changed (e.g. SET DEFAULT) or the name has changed
 		// We need to recreate the dependency links
 		CleanupDependencies(transaction, old_obj);
@@ -846,13 +808,12 @@ void DependencyManager::AddOwnership(CatalogTransaction transaction, CatalogEntr
 
 	DependencyInfo info {
 	    /*dependent = */ DependencyDependent {GetLookupProperties(owner), DependencyDependentFlags().SetOwnedBy()},
-	    /*subject = */ DependencySubject {GetLookupProperties(entry), DependencySubjectFlags().SetOwnership(),
-	                                      optional_idx()}};
+	    /*subject = */ DependencySubject {GetLookupProperties(entry), DependencySubjectFlags().SetOwnership()}};
 	CreateDependency(transaction, info);
 }
 
 static string FormatString(const MangledEntryName &mangled) {
-	auto input = mangled.name.GetIdentifierName();
+	auto input = mangled.name;
 	for (size_t i = 0; i < input.size(); i++) {
 		if (input[i] == '\0') {
 			input[i] = '_';
@@ -869,8 +830,7 @@ void DependencyManager::PrintSubjects(CatalogTransaction transaction, const Cata
 		auto &dep = dependency.Cast<DependencyEntry>();
 		auto &entry_info = dep.EntryInfo();
 		auto type = entry_info.type;
-		auto schema = StringUtil::Join(entry_info.schema_path, entry_info.schema_path.size(), ".",
-		                               [](const Identifier &id) { return id.GetIdentifierName(); });
+		auto schema = entry_info.schema;
 		auto name = entry_info.name;
 		Printer::Print(StringUtil::Format("Schema: %s | Name: %s | Type: %s | Dependent type: %s | Subject type: %s",
 		                                  schema, name, CatalogTypeToString(type), dep.Dependent().flags.ToString(),
@@ -886,8 +846,7 @@ void DependencyManager::PrintDependents(CatalogTransaction transaction, const Ca
 		auto &dep = dependent.Cast<DependencyEntry>();
 		auto &entry_info = dep.EntryInfo();
 		auto type = entry_info.type;
-		auto schema = StringUtil::Join(entry_info.schema_path, entry_info.schema_path.size(), ".",
-		                               [](const Identifier &id) { return id.GetIdentifierName(); });
+		auto schema = entry_info.schema;
 		auto name = entry_info.name;
 		Printer::Print(StringUtil::Format("Schema: %s | Name: %s | Type: %s | Dependent type: %s | Subject type: %s",
 		                                  schema, name, CatalogTypeToString(type), dep.Dependent().flags.ToString(),

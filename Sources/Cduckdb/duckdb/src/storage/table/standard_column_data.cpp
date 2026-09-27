@@ -127,14 +127,10 @@ void StandardColumnData::InitializeAppend(ColumnAppendState &state) {
 	state.child_appends.push_back(std::move(child_append));
 }
 
-void StandardColumnData::AppendData(ColumnAppendState &state, UnifiedVectorFormat &vdata, idx_t count) {
-	ColumnData::AppendData(state, vdata, count);
-	validity->AppendData(state.child_appends[0], vdata, count);
-}
-
-void StandardColumnData::FinalizeAppend(ColumnDataFinalizeAppendState &finalize_state, ColumnAppendState &state) {
-	ColumnData::FinalizeAppend(finalize_state, state);
-	validity->FinalizeAppendLocked(finalize_state, state.child_appends[0]);
+void StandardColumnData::AppendData(BaseStatistics &stats, ColumnAppendState &state, UnifiedVectorFormat &vdata,
+                                    idx_t count) {
+	ColumnData::AppendData(stats, state, vdata, count);
+	validity->AppendData(stats, state.child_appends[0], vdata, count);
 }
 
 void StandardColumnData::RevertAppend(row_t new_count) {
@@ -154,7 +150,7 @@ idx_t StandardColumnData::Fetch(ColumnScanState &state, row_t row_id, Vector &re
 	return scan_count;
 }
 
-void StandardColumnData::Update(TransactionData transaction, DuckTableEntry &table_entry, idx_t column_index,
+void StandardColumnData::Update(TransactionData transaction, DataTable &data_table, idx_t column_index,
                                 Vector &update_vector, row_t *row_ids, idx_t update_count, idx_t row_group_start) {
 	ColumnScanState standard_state(nullptr);
 	ColumnScanState validity_state(nullptr);
@@ -163,24 +159,24 @@ void StandardColumnData::Update(TransactionData transaction, DuckTableEntry &tab
 	FetchUpdateData(standard_state, row_ids, base_vector, row_group_start);
 	validity->FetchUpdateData(validity_state, row_ids, base_vector, row_group_start);
 
-	UpdateInternal(transaction, table_entry, column_index, update_vector, row_ids, update_count, base_vector,
+	UpdateInternal(transaction, data_table, column_index, update_vector, row_ids, update_count, base_vector,
 	               row_group_start);
-	validity->UpdateInternal(transaction, table_entry, column_index, update_vector, row_ids, update_count, base_vector,
+	validity->UpdateInternal(transaction, data_table, column_index, update_vector, row_ids, update_count, base_vector,
 	                         row_group_start);
 }
 
-void StandardColumnData::UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry,
+void StandardColumnData::UpdateColumn(TransactionData transaction, DataTable &data_table,
                                       const vector<column_t> &column_path, Vector &update_vector, row_t *row_ids,
                                       idx_t update_count, idx_t depth, idx_t row_group_start) {
 	if (depth >= column_path.size()) {
 		// update this column
-		ColumnData::Update(transaction, table_entry, column_path[0], update_vector, row_ids, update_count,
+		ColumnData::Update(transaction, data_table, column_path[0], update_vector, row_ids, update_count,
 		                   row_group_start);
 	} else {
 		// update the child column (i.e. the validity column)
-		validity->UpdateColumn(transaction, table_entry, column_path, update_vector, row_ids, update_count, depth + 1,
+		validity->UpdateColumn(transaction, data_table, column_path, update_vector, row_ids, update_count, depth + 1,
 		                       row_group_start);
-		validity->UpdateWithBase(transaction, table_entry, column_path[0], update_vector, row_ids, update_count, *this,
+		validity->UpdateWithBase(transaction, data_table, column_path[0], update_vector, row_ids, update_count, *this,
 		                         row_group_start);
 	}
 }
@@ -200,16 +196,15 @@ unique_ptr<BaseStatistics> StandardColumnData::GetUpdateStatistics() {
 	return stats;
 }
 
-void StandardColumnData::FetchRows(TransactionData transaction, ColumnFetchState &state,
-                                   const StorageIndex &storage_index, const idx_t *offsets, const SelectionVector &sel,
-                                   idx_t fetch_count, Vector &result, idx_t result_offset) {
+void StandardColumnData::FetchRow(TransactionData transaction, ColumnFetchState &state,
+                                  const StorageIndex &storage_index, row_t row_id, Vector &result, idx_t result_idx) {
+	// find the segment the row belongs to
 	if (state.child_states.empty()) {
-		state.child_states.emplace_back(make_uniq<ColumnFetchState>());
+		auto child_state = make_uniq<ColumnFetchState>();
+		state.child_states.push_back(std::move(child_state));
 	}
-	// Bulk fetch the data and the validity in two passes.
-	FetchRowsAtSegmentLevel(transaction, state, offsets, sel, fetch_count, result, result_offset);
-	validity->FetchRowsAtSegmentLevel(transaction, *state.child_states[0], offsets, sel, fetch_count, result,
-	                                  result_offset);
+	ColumnData::FetchRow(transaction, state, storage_index, row_id, result, result_idx);
+	validity->FetchRow(transaction, *state.child_states[0], storage_index, row_id, result, result_idx);
 }
 
 void StandardColumnData::VisitBlockIds(BlockIdVisitor &visitor) const {
@@ -337,11 +332,11 @@ void StandardColumnData::InitializeColumn(PersistentColumnData &column_data, Bas
 }
 
 void StandardColumnData::GetColumnSegmentInfo(const QueryContext &context, duckdb::idx_t row_group_index,
-                                              vector<duckdb::idx_t> col_path, vector<duckdb::ColumnSegmentInfo> &result,
-                                              const ColumnSegmentInfoScanOptions &options) {
-	ColumnData::GetColumnSegmentInfo(context, row_group_index, col_path, result, options);
+                                              vector<duckdb::idx_t> col_path,
+                                              vector<duckdb::ColumnSegmentInfo> &result) {
+	ColumnData::GetColumnSegmentInfo(context, row_group_index, col_path, result);
 	col_path.push_back(0);
-	validity->GetColumnSegmentInfo(context, row_group_index, std::move(col_path), result, options);
+	validity->GetColumnSegmentInfo(context, row_group_index, std::move(col_path), result);
 }
 
 void StandardColumnData::Verify(RowGroup &parent) {

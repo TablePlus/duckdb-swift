@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/enums/tableref_type.hpp"
 #include "duckdb/parser/parsed_data/sample_options.hpp"
@@ -29,7 +28,7 @@ public:
 	}
 
 	TableReferenceType type;
-	Identifier alias;
+	string alias;
 	//! Sample options (if any)
 	unique_ptr<SampleOptions> sample;
 	//! The location in the query (if any)
@@ -37,7 +36,7 @@ public:
 	//! External dependencies of this table function
 	shared_ptr<ExternalDependency> external_dependency;
 	//! Aliases for the column names
-	vector<Identifier> column_name_alias;
+	vector<string> column_name_alias;
 
 public:
 	//! Convert the object to a string
@@ -74,8 +73,8 @@ public:
 
 protected:
 	string BaseToString(string result) const;
-	string BaseToString(string result, const vector<Identifier> &column_name_alias) const;
-	string AliasToString(const vector<Identifier> &column_name_alias) const;
+	string BaseToString(string result, const vector<string> &column_name_alias) const;
+	string AliasToString(const vector<string> &column_name_alias) const;
 	string SampleToString() const;
 };
 } // namespace duckdb

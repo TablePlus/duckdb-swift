@@ -29,7 +29,7 @@ const string ExtensionHelper::NormalizeVersionTag(const string &version_tag) {
 }
 
 bool ExtensionHelper::IsRelease(const string &version_tag) {
-	return VersioningUtils::IsReleaseVersion(version_tag);
+	return !StringUtil::Contains(version_tag, "-dev");
 }
 
 const string ExtensionHelper::GetVersionDirectoryName() {
@@ -50,7 +50,7 @@ const vector<string> ExtensionHelper::PathComponents() {
 string ExtensionHelper::ExtensionInstallDocumentationLink(const string &extension_name) {
 	auto components = PathComponents();
 
-	string link = "https://duckdb.org/docs/current/extensions/troubleshooting";
+	string link = "https://duckdb.org/docs/stable/extensions/troubleshooting";
 
 	if (components.size() >= 2) {
 		link += "?version=" + components[0] + "&platform=" + components[1] + "&extension=" + extension_name;
@@ -175,7 +175,7 @@ bool ExtensionHelper::CreateSuggestions(const string &extension_name, string &me
 		candidates.emplace_back(ExtensionHelper::GetDefaultExtension(i).name);
 	}
 	for (idx_t ext_count = ExtensionHelper::ExtensionAliasCount(), i = 0; i < ext_count; i++) {
-		candidates.emplace_back(ExtensionHelper::GetInternalExtensionAlias(i).alias);
+		candidates.emplace_back(ExtensionHelper::GetExtensionAlias(i).alias);
 	}
 	auto closest_extensions = StringUtil::TopNJaroWinkler(candidates, lowercase_extension_name);
 	message = StringUtil::CandidatesMessage(closest_extensions, "Candidate extensions");
@@ -227,7 +227,7 @@ static void WriteExtensionFileToDisk(QueryContext &query_context, FileSystem &fs
 		    static_cast<char *>(data), data_size, Settings::Get<AllowCommunityExtensionsSetting>(config));
 		if (!signature_valid) {
 			throw IOException("Attempting to install an extension file that doesn't have a valid signature, see "
-			                  "https://duckdb.org/docs/current/operations_manual/securing_duckdb/securing_extensions");
+			                  "https://duckdb.org/docs/stable/operations_manual/securing_duckdb/securing_extensions");
 		}
 	}
 
@@ -470,21 +470,11 @@ static unique_ptr<ExtensionInstallInfo> InstallFromHttpUrl(DatabaseInstance &db,
 		return install_info;
 	}
 
-	string decompressed_body;
-	void *extension_data;
-	idx_t extension_size;
-
-	if (GZipFileSystem::CheckIsZip(response->body.data(), response->body.size())) {
-		decompressed_body = GZipFileSystem::UncompressGZIPString(response->body);
-		extension_data = (void *)decompressed_body.data();
-		extension_size = decompressed_body.size();
-	} else {
-		extension_data = (void *)response->body.data();
-		extension_size = response->body.size();
-	}
+	auto decompressed_body = GZipFileSystem::UncompressGZIPString(response->body);
 
 	ExtensionInstallInfo info;
-	CheckExtensionMetadataOnInstall(db, extension_data, extension_size, info, extension_name);
+	CheckExtensionMetadataOnInstall(db, (void *)decompressed_body.data(), decompressed_body.size(), info,
+	                                extension_name);
 	if (response->HasHeader("ETag")) {
 		info.etag = response->GetHeaderValue("ETag");
 	}
@@ -499,9 +489,9 @@ static unique_ptr<ExtensionInstallInfo> InstallFromHttpUrl(DatabaseInstance &db,
 	}
 
 	QueryContext query_context(context);
-	auto fs = FileSystem::CreateLocal();
-	WriteExtensionFiles(query_context, *fs, temp_path, local_extension_path, extension_data, extension_size, info,
-	                    db.config);
+	auto &fs = FileSystem::GetLocal(db);
+	WriteExtensionFiles(query_context, fs, temp_path, local_extension_path, (void *)decompressed_body.data(),
+	                    decompressed_body.size(), info, db.config);
 
 	return make_uniq<ExtensionInstallInfo>(info);
 }

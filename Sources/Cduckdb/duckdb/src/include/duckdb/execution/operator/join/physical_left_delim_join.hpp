@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/execution/operator/join/physical_delim_join.hpp"
-#include "duckdb/execution/physical_plan_generator.hpp"
 
 namespace duckdb {
 

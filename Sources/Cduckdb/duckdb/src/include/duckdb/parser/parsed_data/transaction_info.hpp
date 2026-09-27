@@ -20,11 +20,7 @@ enum class TransactionModifierType : uint8_t {
 	TRANSACTION_READ_WRITE
 };
 
-enum class TransactionInvalidationPolicy : uint8_t {
-	STANDARD_POLICY,
-	SYNTACTIC_ERRORS_DO_NOT_INVALIDATE,
-	ALL_ERRORS_INVALIDATE_TRANSACTION
-};
+enum class TransactionInvalidationPolicy : uint8_t { STANDARD_POLICY, ALL_ERRORS_INVALIDATE_TRANSACTION };
 
 struct TransactionInfo : public ParseInfo {
 public:

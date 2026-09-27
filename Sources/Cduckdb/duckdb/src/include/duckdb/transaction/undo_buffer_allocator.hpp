@@ -42,11 +42,8 @@ struct UndoBufferReference {
 	BufferHandle handle;
 	idx_t position;
 
-	const_data_ptr_t Ptr() const {
+	data_ptr_t Ptr() {
 		return handle.Ptr() + position;
-	}
-	data_ptr_t GetDataMutable() {
-		return handle.GetDataMutable() + position;
 	}
 	bool IsSet() const {
 		return entry;

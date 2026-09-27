@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/struct_vector.hpp"
 #include "core_functions/scalar/date_functions.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/enum_util.hpp"
@@ -11,12 +10,11 @@
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/execution/expression_executor.hpp"
 
 namespace duckdb {
 
 namespace {
-DatePartSpecifier GetDateTypePartSpecifier(const string &specifier, const LogicalType &type) {
+DatePartSpecifier GetDateTypePartSpecifier(const string &specifier, LogicalType &type) {
 	const auto part = GetDatePartSpecifier(specifier);
 	switch (type.id()) {
 	case LogicalType::TIMESTAMP:
@@ -130,19 +128,6 @@ unique_ptr<FunctionLocalState> InitDateCacheLocalState(ExpressionState &state, c
 }
 
 struct DatePart {
-	struct AsTime {
-		template <typename SRC, typename DST>
-		static DST Operation(SRC src) {
-			if (SRC::PRECISION > DST::PRECISION) {
-				const int64_t scaling = SRC::PRECISION / DST::PRECISION;
-				return DST(src.value / scaling);
-			} else {
-				const int64_t scaling = DST::PRECISION / SRC::PRECISION;
-				return DST(src.value * scaling);
-			}
-		}
-	};
-
 	template <class T, class OP, class TR = int64_t>
 	static unique_ptr<BaseStatistics> PropagateDatePartStatistics(vector<BaseStatistics> &child_stats,
 	                                                              const LogicalType &stats_type = LogicalType::BIGINT) {
@@ -158,7 +143,7 @@ struct DatePart {
 			return nullptr;
 		}
 		// Infinities prevent us from computing generic ranges
-		if (!min.IsFinite() || !max.IsFinite()) {
+		if (!Value::IsFinite(min) || !Value::IsFinite(max)) {
 			return nullptr;
 		}
 		TR min_part = OP::template Operation<T, TR>(min);
@@ -172,9 +157,9 @@ struct DatePart {
 
 	template <typename OP>
 	struct PartOperator {
-		template <class TA, class TR, class DATA_TYPE>
-		static inline TR Operation(TA input, ValidityMask &mask, idx_t idx, DATA_TYPE &data) {
-			if (input.IsFinite()) {
+		template <class TA, class TR>
+		static inline TR Operation(TA input, ValidityMask &mask, idx_t idx, void *dataptr) {
+			if (Value::IsFinite(input)) {
 				return OP::template Operation<TA, TR>(input);
 			} else {
 				mask.SetInvalid(idx);
@@ -187,8 +172,7 @@ struct DatePart {
 	static void UnaryFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 		D_ASSERT(input.ColumnCount() >= 1);
 		using IOP = PartOperator<OP>;
-		std::nullptr_t no_data = nullptr;
-		UnaryExecutor::GenericExecute<TA, TR, IOP>(input.data[0], result, no_data, true);
+		UnaryExecutor::GenericExecute<TA, TR, IOP>(input.data[0], result, input.size(), nullptr, true);
 	}
 
 	struct YearOperator {
@@ -367,7 +351,7 @@ struct DatePart {
 
 		template <class T>
 		static unique_ptr<BaseStatistics> PropagateStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-			return PropagateSimpleDatePartStatistics<1, 53, T>(input.child_stats);
+			return PropagateSimpleDatePartStatistics<1, 54, T>(input.child_stats);
 		}
 	};
 
@@ -440,7 +424,7 @@ struct DatePart {
 		static void Inverse(DataChunk &input, ExpressionState &state, Vector &result) {
 			D_ASSERT(input.ColumnCount() == 1);
 
-			UnaryExecutor::Execute<int64_t, timestamp_t>(input.data[0], result, [&](int64_t input) {
+			UnaryExecutor::Execute<int64_t, timestamp_t>(input.data[0], result, input.size(), [&](int64_t input) {
 				// millisecond amounts provided to epoch_ms should never be considered infinite
 				// instead such values will just throw when converted to microseconds
 				return Timestamp::FromEpochMsPossiblyInfinite(input);
@@ -456,7 +440,7 @@ struct DatePart {
 
 		template <class T>
 		static unique_ptr<BaseStatistics> PropagateStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-			return PropagateSimpleDatePartStatistics<0, 59999999999, T>(input.child_stats);
+			return PropagateSimpleDatePartStatistics<0, 60000000000, T>(input.child_stats);
 		}
 	};
 
@@ -468,7 +452,7 @@ struct DatePart {
 
 		template <class T>
 		static unique_ptr<BaseStatistics> PropagateStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-			return PropagateSimpleDatePartStatistics<0, 59999999, T>(input.child_stats);
+			return PropagateSimpleDatePartStatistics<0, 60000000, T>(input.child_stats);
 		}
 	};
 
@@ -480,7 +464,7 @@ struct DatePart {
 
 		template <class T>
 		static unique_ptr<BaseStatistics> PropagateStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-			return PropagateSimpleDatePartStatistics<0, 59999, T>(input.child_stats);
+			return PropagateSimpleDatePartStatistics<0, 60000, T>(input.child_stats);
 		}
 	};
 
@@ -492,7 +476,7 @@ struct DatePart {
 
 		template <class T>
 		static unique_ptr<BaseStatistics> PropagateStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-			return PropagateSimpleDatePartStatistics<0, 59, T>(input.child_stats);
+			return PropagateSimpleDatePartStatistics<0, 60, T>(input.child_stats);
 		}
 	};
 
@@ -504,7 +488,7 @@ struct DatePart {
 
 		template <class T>
 		static unique_ptr<BaseStatistics> PropagateStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-			return PropagateSimpleDatePartStatistics<0, 59, T>(input.child_stats);
+			return PropagateSimpleDatePartStatistics<0, 60, T>(input.child_stats);
 		}
 	};
 
@@ -568,11 +552,11 @@ struct DatePart {
 		template <typename TA, typename TB, typename TR>
 		static void BinaryFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 			D_ASSERT(input.ColumnCount() == 2);
-			const auto &offset = input.data[0];
-			const auto &timetz = input.data[1];
+			auto &offset = input.data[0];
+			auto &timetz = input.data[1];
 
 			auto func = DatePart::TimezoneOperator::Operation<TA, TB, TR>;
-			BinaryExecutor::Execute<TA, TB, TR>(offset, timetz, result, func);
+			BinaryExecutor::Execute<TA, TB, TR>(offset, timetz, result, input.size(), func);
 		}
 
 		template <class T>
@@ -799,8 +783,9 @@ struct DatePart {
 template <class OP, class T>
 void DatePartCachedFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<DateCacheLocalState<OP>>();
-	UnaryExecutor::Execute<T, int64_t>(args.data[0], result,
-	                                   [&](T input) { return lstate.cache.ExtractElement(input); });
+	UnaryExecutor::ExecuteWithNulls<T, int64_t>(
+	    args.data[0], result, args.size(),
+	    [&](T input, ValidityMask &mask, idx_t idx) { return lstate.cache.ExtractElement(input, mask, idx); });
 }
 
 template <>
@@ -820,7 +805,7 @@ int64_t DatePart::YearOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::YearOperator::Operation(dtime_ns_t input) {
-	return YearOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return YearOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -845,7 +830,7 @@ int64_t DatePart::MonthOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::MonthOperator::Operation(dtime_ns_t input) {
-	return MonthOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return MonthOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -870,7 +855,7 @@ int64_t DatePart::DayOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::DayOperator::Operation(dtime_ns_t input) {
-	return DayOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return DayOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -940,7 +925,7 @@ int64_t DatePart::QuarterOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::QuarterOperator::Operation(dtime_ns_t input) {
-	return QuarterOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return QuarterOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -965,7 +950,7 @@ int64_t DatePart::DayOfWeekOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::DayOfWeekOperator::Operation(dtime_ns_t input) {
-	return DayOfWeekOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return DayOfWeekOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -990,7 +975,7 @@ int64_t DatePart::ISODayOfWeekOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::ISODayOfWeekOperator::Operation(dtime_ns_t input) {
-	return ISODayOfWeekOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return ISODayOfWeekOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1015,7 +1000,7 @@ int64_t DatePart::DayOfYearOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::DayOfYearOperator::Operation(dtime_ns_t input) {
-	return DayOfYearOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return DayOfYearOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1040,7 +1025,7 @@ int64_t DatePart::WeekOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::WeekOperator::Operation(dtime_ns_t input) {
-	return WeekOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return WeekOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1065,7 +1050,7 @@ int64_t DatePart::ISOYearOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::ISOYearOperator::Operation(dtime_ns_t input) {
-	return ISOYearOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return ISOYearOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1092,7 +1077,7 @@ int64_t DatePart::YearWeekOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::YearWeekOperator::Operation(dtime_ns_t input) {
-	return YearWeekOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return YearWeekOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1102,13 +1087,13 @@ int64_t DatePart::YearWeekOperator::Operation(dtime_tz_t input) {
 
 template <>
 int64_t DatePart::EpochNanosecondsOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	return Timestamp::GetEpochNanoSeconds(input);
 }
 
 template <>
 int64_t DatePart::EpochNanosecondsOperator::Operation(date_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Date::IsFinite(input));
 	return Date::EpochNanoseconds(input);
 }
 
@@ -1119,12 +1104,12 @@ int64_t DatePart::EpochNanosecondsOperator::Operation(interval_t input) {
 
 template <>
 int64_t DatePart::EpochNanosecondsOperator::Operation(dtime_t input) {
-	return input.value * Interval::NANOS_PER_MICRO;
+	return input.micros * Interval::NANOS_PER_MICRO;
 }
 
 template <>
 int64_t DatePart::EpochNanosecondsOperator::Operation(dtime_ns_t input) {
-	return input.value;
+	return input.micros;
 }
 
 template <>
@@ -1144,19 +1129,18 @@ int64_t DatePart::EpochMicrosecondsOperator::Operation(interval_t input) {
 
 template <>
 int64_t DatePart::EpochMillisOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	return Cast::Operation<timestamp_t, timestamp_ms_t>(input).value;
 }
 
 template <>
 int64_t DatePart::EpochMicrosecondsOperator::Operation(dtime_t input) {
-	return input.value;
+	return input.micros;
 }
 
 template <>
 int64_t DatePart::EpochMicrosecondsOperator::Operation(dtime_ns_t input) {
-	return DatePart::EpochMicrosecondsOperator::Operation<dtime_t, int64_t>(
-	    AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return DatePart::EpochMicrosecondsOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1176,7 +1160,7 @@ int64_t DatePart::EpochMillisOperator::Operation(interval_t input) {
 
 template <>
 int64_t DatePart::EpochMillisOperator::Operation(dtime_t input) {
-	return input.value / Interval::MICROS_PER_MSEC;
+	return input.micros / Interval::MICROS_PER_MSEC;
 }
 
 template <>
@@ -1186,7 +1170,7 @@ int64_t DatePart::EpochMillisOperator::Operation(dtime_tz_t input) {
 
 template <>
 int64_t DatePart::NanosecondsOperator::Operation(timestamp_ns_t input) {
-	if (!input.IsFinite()) {
+	if (!Timestamp::IsFinite(input)) {
 		throw ConversionException("Can't get nanoseconds of infinite TIMESTAMP");
 	}
 	date_t date;
@@ -1194,20 +1178,20 @@ int64_t DatePart::NanosecondsOperator::Operation(timestamp_ns_t input) {
 	int32_t nanos;
 	Timestamp::Convert(input, date, time, nanos);
 	// remove everything but the second & nanosecond part
-	return (time.value % Interval::MICROS_PER_MINUTE) * Interval::NANOS_PER_MICRO + nanos;
+	return (time.micros % Interval::MICROS_PER_MINUTE) * Interval::NANOS_PER_MICRO + nanos;
 }
 
 template <>
 int64_t DatePart::NanosecondsOperator::Operation(dtime_ns_t input) {
-	return input.value % Interval::NANOS_PER_MINUTE;
+	return input.micros % Interval::NANOS_PER_MINUTE;
 }
 
 template <>
 int64_t DatePart::MicrosecondsOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	auto time = Timestamp::GetTime(input);
 	// remove everything but the second & microsecond part
-	return time.value % Interval::MICROS_PER_MINUTE;
+	return time.micros % Interval::MICROS_PER_MINUTE;
 }
 
 template <>
@@ -1219,12 +1203,12 @@ int64_t DatePart::MicrosecondsOperator::Operation(interval_t input) {
 template <>
 int64_t DatePart::MicrosecondsOperator::Operation(dtime_t input) {
 	// remove everything but the second & microsecond part
-	return input.value % Interval::MICROS_PER_MINUTE;
+	return input.micros % Interval::MICROS_PER_MINUTE;
 }
 
 template <>
 int64_t DatePart::MicrosecondsOperator::Operation(dtime_ns_t input) {
-	return DatePart::MicrosecondsOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return DatePart::MicrosecondsOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1234,7 +1218,7 @@ int64_t DatePart::MicrosecondsOperator::Operation(dtime_tz_t input) {
 
 template <>
 int64_t DatePart::MillisecondsOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	return MicrosecondsOperator::Operation<timestamp_t, int64_t>(input) / Interval::MICROS_PER_MSEC;
 }
 
@@ -1250,7 +1234,7 @@ int64_t DatePart::MillisecondsOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::MillisecondsOperator::Operation(dtime_ns_t input) {
-	return MillisecondsOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return MillisecondsOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1260,7 +1244,7 @@ int64_t DatePart::MillisecondsOperator::Operation(dtime_tz_t input) {
 
 template <>
 int64_t DatePart::SecondsOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	return MicrosecondsOperator::Operation<timestamp_t, int64_t>(input) / Interval::MICROS_PER_SEC;
 }
 
@@ -1276,7 +1260,7 @@ int64_t DatePart::SecondsOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::SecondsOperator::Operation(dtime_ns_t input) {
-	return SecondsOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return SecondsOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1286,10 +1270,10 @@ int64_t DatePart::SecondsOperator::Operation(dtime_tz_t input) {
 
 template <>
 int64_t DatePart::MinutesOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	auto time = Timestamp::GetTime(input);
 	// remove the hour part, and truncate to minutes
-	return (time.value % Interval::MICROS_PER_HOUR) / Interval::MICROS_PER_MINUTE;
+	return (time.micros % Interval::MICROS_PER_HOUR) / Interval::MICROS_PER_MINUTE;
 }
 
 template <>
@@ -1301,12 +1285,12 @@ int64_t DatePart::MinutesOperator::Operation(interval_t input) {
 template <>
 int64_t DatePart::MinutesOperator::Operation(dtime_t input) {
 	// remove the hour part, and truncate to minutes
-	return (input.value % Interval::MICROS_PER_HOUR) / Interval::MICROS_PER_MINUTE;
+	return (input.micros % Interval::MICROS_PER_HOUR) / Interval::MICROS_PER_MINUTE;
 }
 
 template <>
 int64_t DatePart::MinutesOperator::Operation(dtime_ns_t input) {
-	return MinutesOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return MinutesOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1316,8 +1300,8 @@ int64_t DatePart::MinutesOperator::Operation(dtime_tz_t input) {
 
 template <>
 int64_t DatePart::HoursOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
-	return Timestamp::GetTime(input).value / Interval::MICROS_PER_HOUR;
+	D_ASSERT(Timestamp::IsFinite(input));
+	return Timestamp::GetTime(input).micros / Interval::MICROS_PER_HOUR;
 }
 
 template <>
@@ -1327,12 +1311,12 @@ int64_t DatePart::HoursOperator::Operation(interval_t input) {
 
 template <>
 int64_t DatePart::HoursOperator::Operation(dtime_t input) {
-	return input.value / Interval::MICROS_PER_HOUR;
+	return input.micros / Interval::MICROS_PER_HOUR;
 }
 
 template <>
 int64_t DatePart::HoursOperator::Operation(dtime_ns_t input) {
-	return HoursOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return HoursOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1342,7 +1326,7 @@ int64_t DatePart::HoursOperator::Operation(dtime_tz_t input) {
 
 template <>
 double DatePart::EpochOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	return double(Timestamp::GetEpochMicroSeconds(input)) / double(Interval::MICROS_PER_SEC);
 }
 
@@ -1369,12 +1353,12 @@ unique_ptr<BaseStatistics> DatePart::EpochOperator::PropagateStatistics<interval
 
 template <>
 double DatePart::EpochOperator::Operation(dtime_t input) {
-	return double(input.value) / double(Interval::MICROS_PER_SEC);
+	return double(input.micros) / double(Interval::MICROS_PER_SEC);
 }
 
 template <>
 double DatePart::EpochOperator::Operation(dtime_ns_t input) {
-	return EpochOperator::Operation<dtime_t, double>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return EpochOperator::Operation<dtime_t, double>(input.time());
 }
 
 template <>
@@ -1394,7 +1378,7 @@ unique_ptr<BaseStatistics> DatePart::EpochOperator::PropagateStatistics<dtime_t>
 
 template <>
 int64_t DatePart::EraOperator::Operation(timestamp_t input) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	return EraOperator::Operation<date_t, int64_t>(Timestamp::GetDate(input));
 }
 
@@ -1410,7 +1394,7 @@ int64_t DatePart::EraOperator::Operation(dtime_t input) {
 
 template <>
 int64_t DatePart::EraOperator::Operation(dtime_ns_t input) {
-	return EraOperator::Operation<dtime_t, int64_t>(AsTime::Operation<dtime_ns_t, dtime_t>(input));
+	return EraOperator::Operation<dtime_t, int64_t>(input.time());
 }
 
 template <>
@@ -1625,7 +1609,7 @@ void DatePart::StructOperator::Operation(bigint_vec &bigint_values, double_vec &
 template <>
 void DatePart::StructOperator::Operation(bigint_vec &bigint_values, double_vec &double_values, const timestamp_t &input,
                                          const idx_t idx, const part_mask_t mask) {
-	D_ASSERT(input.IsFinite());
+	D_ASSERT(Timestamp::IsFinite(input));
 	date_t d;
 	dtime_t t;
 	Timestamp::Convert(input, d, t);
@@ -1773,36 +1757,37 @@ int64_t ExtractElement(DatePartSpecifier type, T element) {
 template <typename T>
 void DatePartFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 2);
-	const auto &spec_arg = args.data[0];
-	const auto &date_arg = args.data[1];
+	auto &spec_arg = args.data[0];
+	auto &date_arg = args.data[1];
 
-	BinaryExecutor::Execute<string_t, T, int64_t>(
-	    spec_arg, date_arg, result, [&](string_t specifier, T date) -> optional<int64_t> {
-		    if (date.IsFinite()) {
+	BinaryExecutor::ExecuteWithNulls<string_t, T, int64_t>(
+	    spec_arg, date_arg, result, args.size(), [&](string_t specifier, T date, ValidityMask &mask, idx_t idx) {
+		    if (Value::IsFinite(date)) {
 			    return ExtractElement<T>(GetDatePartSpecifier(specifier.GetString()), date);
 		    } else {
-			    return nullopt;
+			    mask.SetInvalid(idx);
+			    return int64_t(0);
 		    }
 	    });
 }
 
-unique_ptr<FunctionData> DatePartBind(BindScalarFunctionInput &input) {
-	auto &bound_function = input.GetBoundFunction();
-	auto &arguments = input.GetArguments();
+unique_ptr<FunctionData> DatePartBind(ClientContext &context, ScalarFunction &bound_function,
+                                      vector<unique_ptr<Expression>> &arguments) {
 	//	If we are only looking for Julian Days for timestamps,
 	//	then return doubles.
-	auto part_constant = input.TryGetConstant(0);
-	if (!part_constant) {
+	if (arguments[0]->HasParameter() || !arguments[0]->IsFoldable()) {
 		return nullptr;
 	}
-	const auto part_name = part_constant->ToString();
+
+	Value part_value = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
+	const auto part_name = part_value.ToString();
 	switch (GetDatePartSpecifier(part_name)) {
 	case DatePartSpecifier::JULIAN_DAY:
 		arguments.erase(arguments.begin());
-		bound_function.GetArguments().erase(bound_function.GetArguments().begin());
-		bound_function.SetName("julian");
+		bound_function.arguments.erase(bound_function.arguments.begin());
+		bound_function.name = "julian";
 		bound_function.SetReturnType(LogicalType::DOUBLE);
-		switch (arguments[0]->GetReturnType().id()) {
+		switch (arguments[0]->return_type.id()) {
 		case LogicalType::TIMESTAMP:
 		case LogicalType::TIMESTAMP_S:
 		case LogicalType::TIMESTAMP_MS:
@@ -1817,15 +1802,15 @@ unique_ptr<FunctionData> DatePartBind(BindScalarFunctionInput &input) {
 			bound_function.SetStatisticsCallback(DatePart::JulianDayOperator::template PropagateStatistics<date_t>);
 			break;
 		default:
-			throw BinderException("%s can only take DATE or TIMESTAMP arguments", bound_function.GetName());
+			throw BinderException("%s can only take DATE or TIMESTAMP arguments", bound_function.name);
 		}
 		break;
 	case DatePartSpecifier::EPOCH:
 		arguments.erase(arguments.begin());
-		bound_function.GetArguments().erase(bound_function.GetArguments().begin());
-		bound_function.SetName("epoch");
+		bound_function.arguments.erase(bound_function.arguments.begin());
+		bound_function.name = "epoch";
 		bound_function.SetReturnType(LogicalType::DOUBLE);
-		switch (arguments[0]->GetReturnType().id()) {
+		switch (arguments[0]->return_type.id()) {
 		case LogicalType::TIMESTAMP:
 		case LogicalType::TIMESTAMP_S:
 		case LogicalType::TIMESTAMP_MS:
@@ -1854,7 +1839,7 @@ unique_ptr<FunctionData> DatePartBind(BindScalarFunctionInput &input) {
 			bound_function.SetStatisticsCallback(DatePart::EpochOperator::template PropagateStatistics<dtime_tz_t>);
 			break;
 		default:
-			throw BinderException("%s can only take temporal arguments", bound_function.GetName());
+			throw BinderException("%s can only take temporal arguments", bound_function.name);
 		}
 		break;
 	default:
@@ -1870,9 +1855,9 @@ ScalarFunctionSet GetGenericDatePartFunction(scalar_function_t date_func, scalar
                                              function_statistics_t ts_stats) {
 	ScalarFunctionSet operator_set;
 	operator_set.AddFunction(ScalarFunction({LogicalType::DATE}, LogicalType::BIGINT, std::move(date_func), nullptr,
-	                                        date_stats, DATE_CACHE));
+	                                        nullptr, date_stats, DATE_CACHE));
 	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BIGINT, std::move(ts_func), nullptr,
-	                                        ts_stats, DATE_CACHE));
+	                                        nullptr, ts_stats, DATE_CACHE));
 	operator_set.AddFunction(ScalarFunction({LogicalType::INTERVAL}, LogicalType::BIGINT, std::move(interval_func)));
 	for (auto &func : operator_set.functions) {
 		func.SetFallible();
@@ -1896,16 +1881,16 @@ ScalarFunctionSet GetGenericTimePartFunction(const LogicalType &result_type, sca
                                              function_statistics_t time_ns_stats, function_statistics_t timetz_stats) {
 	ScalarFunctionSet operator_set;
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::DATE}, result_type, std::move(date_func), nullptr, date_stats));
+	    ScalarFunction({LogicalType::DATE}, result_type, std::move(date_func), nullptr, nullptr, date_stats));
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIMESTAMP}, result_type, std::move(ts_func), nullptr, ts_stats));
+	    ScalarFunction({LogicalType::TIMESTAMP}, result_type, std::move(ts_func), nullptr, nullptr, ts_stats));
 	operator_set.AddFunction(ScalarFunction({LogicalType::INTERVAL}, result_type, std::move(interval_func)));
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIME}, result_type, std::move(time_func), nullptr, time_stats));
+	    ScalarFunction({LogicalType::TIME}, result_type, std::move(time_func), nullptr, nullptr, time_stats));
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIME_NS}, result_type, std::move(time_ns_func), nullptr, time_ns_stats));
+	    ScalarFunction({LogicalType::TIME_NS}, result_type, std::move(time_ns_func), nullptr, nullptr, time_ns_stats));
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIME_TZ}, result_type, std::move(timetz_func), nullptr, timetz_stats));
+	    ScalarFunction({LogicalType::TIME_TZ}, result_type, std::move(timetz_func), nullptr, nullptr, timetz_stats));
 	return operator_set;
 }
 
@@ -1966,29 +1951,34 @@ struct StructDatePart {
 		}
 	};
 
-	static unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input) {
-		auto &bound_function = input.GetBoundFunction();
-		auto &arguments = input.GetArguments();
+	static unique_ptr<FunctionData> Bind(ClientContext &context, ScalarFunction &bound_function,
+	                                     vector<unique_ptr<Expression>> &arguments) {
 		// collect names and deconflict, construct return type
-		auto parts_list = input.GetConstant(0);
+		if (arguments[0]->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		if (!arguments[0]->IsFoldable()) {
+			throw BinderException("%s can only take constant lists of part names", bound_function.name);
+		}
 
 		case_insensitive_set_t name_collision_set;
 		child_list_t<LogicalType> struct_children;
 		part_codes_t part_codes;
+
+		Value parts_list = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
 		if (parts_list.type().id() == LogicalTypeId::LIST) {
 			auto &list_children = ListValue::GetChildren(parts_list);
 			if (list_children.empty()) {
-				throw BinderException("%s requires non-empty lists of part names", bound_function.GetName());
+				throw BinderException("%s requires non-empty lists of part names", bound_function.name);
 			}
 			for (const auto &part_value : list_children) {
 				if (part_value.IsNull()) {
-					throw BinderException("NULL struct entry name in %s", bound_function.GetName());
+					throw BinderException("NULL struct entry name in %s", bound_function.name);
 				}
 				const auto part_name = part_value.ToString();
-				const auto part_code = GetDateTypePartSpecifier(part_name, arguments[1]->GetReturnType());
+				const auto part_code = GetDateTypePartSpecifier(part_name, arguments[1]->return_type);
 				if (name_collision_set.find(part_name) != name_collision_set.end()) {
-					throw BinderException("Duplicate struct entry name \"%s\" in %s", part_name,
-					                      bound_function.GetName());
+					throw BinderException("Duplicate struct entry name \"%s\" in %s", part_name, bound_function.name);
 				}
 				name_collision_set.insert(part_name);
 				part_codes.emplace_back(part_code);
@@ -1996,7 +1986,7 @@ struct StructDatePart {
 				struct_children.emplace_back(make_pair(part_name, part_type));
 			}
 		} else {
-			throw BinderException("%s can only take constant lists of part names", bound_function.GetName());
+			throw BinderException("%s can only take constant lists of part names", bound_function.name);
 		}
 
 		Function::EraseArgument(bound_function, arguments, 0);
@@ -2007,11 +1997,11 @@ struct StructDatePart {
 	template <typename INPUT_TYPE>
 	static void Function(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.BindInfo()->Cast<BindData>();
+		auto &info = func_expr.bind_info->Cast<BindData>();
 		D_ASSERT(args.ColumnCount() == 1);
 
 		const auto count = args.size();
-		const Vector &input = args.data[0];
+		Vector &input = args.data[0];
 
 		//	Type counts
 		const auto BIGINT_COUNT = size_t(DatePartSpecifier::BEGIN_DOUBLE) - size_t(DatePartSpecifier::BEGIN_BIGINT);
@@ -2023,7 +2013,7 @@ struct StructDatePart {
 		auto &child_entries = StructVector::GetEntries(result);
 
 		// The first computer of a part "owns" it
-		// and other requesters just reference the owner
+		// and other requestors just reference the owner
 		vector<size_t> owners(int(DatePartSpecifier::JULIAN_DAY) + 1, child_entries.size());
 		for (size_t col = 0; col < child_entries.size(); ++col) {
 			const auto part_index = size_t(info.part_codes[col]);
@@ -2032,51 +2022,87 @@ struct StructDatePart {
 			}
 		}
 
-		auto entries = input.Values<INPUT_TYPE>();
+		if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
 
-		// Start with a valid flat vector
-		result.SetVectorType(VectorType::FLAT_VECTOR);
-		auto &res_valid = FlatVector::ValidityMutable(result);
-		if (res_valid.GetData()) {
-			res_valid.SetAllValid(count);
-		}
-
-		// Start with valid children
-		for (size_t col = 0; col < child_entries.size(); ++col) {
-			auto &child_entry = child_entries[col];
-			child_entry.SetVectorType(VectorType::FLAT_VECTOR);
-			auto &child_validity = FlatVector::ValidityMutable(child_entry);
-			if (child_validity.GetData()) {
-				child_validity.SetAllValid(count);
-			}
-
-			// Pre-multiplex
-			const auto part_index = size_t(info.part_codes[col]);
-			if (owners[part_index] == col) {
-				if (IsBigintDatepart(info.part_codes[col])) {
-					bigint_values[part_index - size_t(DatePartSpecifier::BEGIN_BIGINT)] =
-					    FlatVector::GetDataMutable<int64_t>(child_entry);
-				} else {
-					double_values[part_index - size_t(DatePartSpecifier::BEGIN_DOUBLE)] =
-					    FlatVector::GetDataMutable<double>(child_entry);
-				}
-			}
-		}
-
-		for (idx_t i = 0; i < count; ++i) {
-			auto entry = entries[i];
-			if (entry.IsValid()) {
-				if (Value::IsFinite(entry.GetValue())) {
-					DatePart::StructOperator::Operation(bigint_values, double_values, entry.GetValue(), i, part_mask);
-				} else {
-					for (auto &child_entry : child_entries) {
-						FlatVector::ValidityMutable(child_entry).SetInvalid(i);
+			if (ConstantVector::IsNull(input)) {
+				ConstantVector::SetNull(result, true);
+			} else {
+				ConstantVector::SetNull(result, false);
+				for (size_t col = 0; col < child_entries.size(); ++col) {
+					auto &child_entry = child_entries[col];
+					ConstantVector::SetNull(*child_entry, false);
+					const auto part_index = size_t(info.part_codes[col]);
+					if (owners[part_index] == col) {
+						if (IsBigintDatepart(info.part_codes[col])) {
+							bigint_values[part_index - size_t(DatePartSpecifier::BEGIN_BIGINT)] =
+							    ConstantVector::GetData<int64_t>(*child_entry);
+						} else {
+							double_values[part_index - size_t(DatePartSpecifier::BEGIN_DOUBLE)] =
+							    ConstantVector::GetData<double>(*child_entry);
+						}
 					}
 				}
-			} else {
-				res_valid.SetInvalid(i);
-				for (auto &child_entry : child_entries) {
-					FlatVector::ValidityMutable(child_entry).SetInvalid(i);
+				auto tdata = ConstantVector::GetData<INPUT_TYPE>(input);
+				if (Value::IsFinite(tdata[0])) {
+					DatePart::StructOperator::Operation(bigint_values, double_values, tdata[0], 0, part_mask);
+				} else {
+					for (auto &child_entry : child_entries) {
+						ConstantVector::SetNull(*child_entry, true);
+					}
+				}
+			}
+		} else {
+			UnifiedVectorFormat rdata;
+			input.ToUnifiedFormat(count, rdata);
+
+			const auto &arg_valid = rdata.validity;
+			auto tdata = UnifiedVectorFormat::GetData<INPUT_TYPE>(rdata);
+
+			// Start with a valid flat vector
+			result.SetVectorType(VectorType::FLAT_VECTOR);
+			auto &res_valid = FlatVector::Validity(result);
+			if (res_valid.GetData()) {
+				res_valid.SetAllValid(count);
+			}
+
+			// Start with valid children
+			for (size_t col = 0; col < child_entries.size(); ++col) {
+				auto &child_entry = child_entries[col];
+				child_entry->SetVectorType(VectorType::FLAT_VECTOR);
+				auto &child_validity = FlatVector::Validity(*child_entry);
+				if (child_validity.GetData()) {
+					child_validity.SetAllValid(count);
+				}
+
+				// Pre-multiplex
+				const auto part_index = size_t(info.part_codes[col]);
+				if (owners[part_index] == col) {
+					if (IsBigintDatepart(info.part_codes[col])) {
+						bigint_values[part_index - size_t(DatePartSpecifier::BEGIN_BIGINT)] =
+						    FlatVector::GetData<int64_t>(*child_entry);
+					} else {
+						double_values[part_index - size_t(DatePartSpecifier::BEGIN_DOUBLE)] =
+						    FlatVector::GetData<double>(*child_entry);
+					}
+				}
+			}
+
+			for (idx_t i = 0; i < count; ++i) {
+				const auto idx = rdata.sel->get_index(i);
+				if (arg_valid.RowIsValid(idx)) {
+					if (Value::IsFinite(tdata[idx])) {
+						DatePart::StructOperator::Operation(bigint_values, double_values, tdata[idx], i, part_mask);
+					} else {
+						for (auto &child_entry : child_entries) {
+							FlatVector::Validity(*child_entry).SetInvalid(i);
+						}
+					}
+				} else {
+					res_valid.SetInvalid(i);
+					for (auto &child_entry : child_entries) {
+						FlatVector::Validity(*child_entry).SetInvalid(i);
+					}
 				}
 			}
 		}
@@ -2086,23 +2112,22 @@ struct StructDatePart {
 			const auto part_index = size_t(info.part_codes[col]);
 			const auto owner = owners[part_index];
 			if (owner != col) {
-				child_entries[col].Reference(child_entries[owner]);
+				child_entries[col]->Reference(*child_entries[owner]);
 			}
 		}
 
-		result.Verify();
+		result.Verify(count);
 	}
 
 	static void SerializeFunction(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
-	                              const BoundScalarFunction &function) {
+	                              const ScalarFunction &function) {
 		D_ASSERT(bind_data_p);
 		auto &info = bind_data_p->Cast<BindData>();
 		serializer.WriteProperty(100, "stype", info.stype);
 		serializer.WriteProperty(101, "part_codes", info.part_codes);
 	}
 
-	static unique_ptr<FunctionData> DeserializeFunction(Deserializer &deserializer,
-	                                                    BoundScalarFunction &bound_function) {
+	static unique_ptr<FunctionData> DeserializeFunction(Deserializer &deserializer, ScalarFunction &bound_function) {
 		auto stype = deserializer.ReadProperty<LogicalType>(100, "stype");
 		auto part_codes = deserializer.ReadProperty<vector<DatePartSpecifier>>(101, "part_codes");
 		return make_uniq<BindData>(std::move(stype), std::move(part_codes));
@@ -2112,8 +2137,7 @@ struct StructDatePart {
 	static ScalarFunction GetFunction(const LogicalType &temporal_type) {
 		auto part_type = LogicalType::LIST(LogicalType::VARCHAR);
 		auto result_type = LogicalType::STRUCT({});
-		ScalarFunction result({{"part_list", part_type}, {"ts", temporal_type}}, result_type, Function<INPUT_TYPE>,
-		                      Bind);
+		ScalarFunction result({part_type, temporal_type}, result_type, Function<INPUT_TYPE>, Bind);
 		result.SetSerializeCallback(SerializeFunction);
 		result.SetDeserializeCallback(DeserializeFunction);
 		return result;
@@ -2130,9 +2154,7 @@ ScalarFunctionSet GetCachedDatepartFunction() {
 } // namespace
 
 ScalarFunctionSet YearFun::GetFunctions() {
-	auto set = GetCachedDatepartFunction<DatePart::YearOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetCachedDatepartFunction<DatePart::YearOperator>();
 }
 
 ScalarFunctionSet MonthFun::GetFunctions() {
@@ -2144,21 +2166,15 @@ ScalarFunctionSet DayFun::GetFunctions() {
 }
 
 ScalarFunctionSet DecadeFun::GetFunctions() {
-	auto set = GetDatePartFunction<DatePart::DecadeOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetDatePartFunction<DatePart::DecadeOperator>();
 }
 
 ScalarFunctionSet CenturyFun::GetFunctions() {
-	auto set = GetDatePartFunction<DatePart::CenturyOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetDatePartFunction<DatePart::CenturyOperator>();
 }
 
 ScalarFunctionSet MillenniumFun::GetFunctions() {
-	auto set = GetDatePartFunction<DatePart::MillenniumOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetDatePartFunction<DatePart::MillenniumOperator>();
 }
 
 ScalarFunctionSet QuarterFun::GetFunctions() {
@@ -2186,15 +2202,11 @@ ScalarFunctionSet WeekFun::GetFunctions() {
 }
 
 ScalarFunctionSet ISOYearFun::GetFunctions() {
-	auto set = GetDatePartFunction<DatePart::ISOYearOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetDatePartFunction<DatePart::ISOYearOperator>();
 }
 
 ScalarFunctionSet EraFun::GetFunctions() {
-	auto set = GetDatePartFunction<DatePart::EraOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetDatePartFunction<DatePart::EraOperator>();
 }
 
 ScalarFunctionSet TimezoneFun::GetFunctions() {
@@ -2222,9 +2234,20 @@ ScalarFunctionSet TimezoneMinuteFun::GetFunctions() {
 }
 
 ScalarFunctionSet EpochFun::GetFunctions() {
-	auto set = GetTimePartFunction<DatePart::EpochOperator, double>(LogicalType::DOUBLE);
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetTimePartFunction<DatePart::EpochOperator, double>(LogicalType::DOUBLE);
+}
+
+struct GetEpochNanosOperator {
+	static int64_t Operation(timestamp_ns_t timestamp) {
+		return Timestamp::GetEpochNanoSeconds(timestamp);
+	}
+};
+
+static void ExecuteGetNanosFromTimestampNs(DataChunk &input, ExpressionState &state, Vector &result) {
+	D_ASSERT(input.ColumnCount() == 1);
+
+	auto func = GetEpochNanosOperator::Operation;
+	UnaryExecutor::Execute<timestamp_ns_t, int64_t>(input.data[0], result, input.size(), func);
 }
 
 ScalarFunctionSet EpochNsFun::GetFunctions() {
@@ -2235,11 +2258,10 @@ ScalarFunctionSet EpochNsFun::GetFunctions() {
 	auto tstz_func = DatePart::UnaryFunction<timestamp_t, int64_t, OP>;
 	auto tstz_stats = OP::template PropagateStatistics<timestamp_t>;
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, tstz_stats));
-	auto tsns_func = DatePart::UnaryFunction<timestamp_ns_t, int64_t, OP>;
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_NS}, LogicalType::BIGINT, tsns_func));
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_TZ_NS}, LogicalType::BIGINT, tsns_func));
-	operator_set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
+	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, nullptr, tstz_stats));
+
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIMESTAMP_NS}, LogicalType::BIGINT, ExecuteGetNanosFromTimestampNs));
 	return operator_set;
 }
 
@@ -2251,8 +2273,7 @@ ScalarFunctionSet EpochUsFun::GetFunctions() {
 	auto tstz_func = DatePart::UnaryFunction<timestamp_t, int64_t, OP>;
 	auto tstz_stats = OP::template PropagateStatistics<timestamp_t>;
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, tstz_stats));
-	operator_set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
+	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, nullptr, tstz_stats));
 	return operator_set;
 }
 
@@ -2264,13 +2285,12 @@ ScalarFunctionSet EpochMsFun::GetFunctions() {
 	auto tstz_func = DatePart::UnaryFunction<timestamp_t, int64_t, OP>;
 	auto tstz_stats = OP::template PropagateStatistics<timestamp_t>;
 	operator_set.AddFunction(
-	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, tstz_stats));
+	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, nullptr, tstz_stats));
 
 	//	Deprecated inverse BIGINT => TIMESTAMP
 	operator_set.AddFunction(
 	    ScalarFunction({LogicalType::BIGINT}, LogicalType::TIMESTAMP, DatePart::EpochMillisOperator::Inverse));
 
-	operator_set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
 	return operator_set;
 }
 
@@ -2278,7 +2298,6 @@ ScalarFunctionSet MakeTimestampMsFun::GetFunctions() {
 	ScalarFunctionSet operator_set("make_timestamp_ms");
 	operator_set.AddFunction(
 	    ScalarFunction({LogicalType::BIGINT}, LogicalType::TIMESTAMP, DatePart::EpochMillisOperator::Inverse));
-	operator_set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
 	return operator_set;
 }
 
@@ -2290,13 +2309,14 @@ ScalarFunctionSet NanosecondsFun::GetFunctions() {
 
 	auto ns_func = DatePart::UnaryFunction<timestamp_ns_t, TR, OP>;
 	auto ns_stats = OP::template PropagateStatistics<timestamp_ns_t>;
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_NS}, result_type, ns_func, nullptr, ns_stats));
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_TZ_NS}, result_type, ns_func, nullptr, ns_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIMESTAMP_NS}, result_type, ns_func, nullptr, nullptr, ns_stats));
 
 	//	TIMESTAMP WITH TIME ZONE has the same representation as TIMESTAMP so no need to defer to ICU
 	auto tstz_func = DatePart::UnaryFunction<timestamp_t, TR, OP>;
 	auto tstz_stats = OP::template PropagateStatistics<timestamp_t>;
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_TZ}, result_type, tstz_func, nullptr, tstz_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BIGINT, tstz_func, nullptr, nullptr, tstz_stats));
 
 	return operator_set;
 }
@@ -2322,9 +2342,7 @@ ScalarFunctionSet HoursFun::GetFunctions() {
 }
 
 ScalarFunctionSet YearWeekFun::GetFunctions() {
-	auto set = GetDatePartFunction<DatePart::YearWeekOperator>();
-	set.SetUnaryArgProperties(ArgProperties().NonDecreasing());
-	return set;
+	return GetDatePartFunction<DatePart::YearWeekOperator>();
 }
 
 ScalarFunctionSet DayOfMonthFun::GetFunctions() {
@@ -2372,10 +2390,12 @@ ScalarFunctionSet JulianDayFun::GetFunctions() {
 	ScalarFunctionSet operator_set;
 	auto date_func = DatePart::UnaryFunction<date_t, double, OP>;
 	auto date_stats = OP::template PropagateStatistics<date_t>;
-	operator_set.AddFunction(ScalarFunction({LogicalType::DATE}, LogicalType::DOUBLE, date_func, nullptr, date_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::DATE}, LogicalType::DOUBLE, date_func, nullptr, nullptr, date_stats));
 	auto ts_func = DatePart::UnaryFunction<timestamp_t, double, OP>;
 	auto ts_stats = OP::template PropagateStatistics<timestamp_t>;
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::DOUBLE, ts_func, nullptr, ts_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::DOUBLE, ts_func, nullptr, nullptr, ts_stats));
 
 	return operator_set;
 }

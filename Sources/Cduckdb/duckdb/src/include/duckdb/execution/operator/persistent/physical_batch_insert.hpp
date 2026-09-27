@@ -11,7 +11,6 @@
 #include "duckdb/execution/operator/persistent/physical_insert.hpp"
 
 namespace duckdb {
-class DuckTableEntry;
 
 class PhysicalBatchInsert : public PhysicalOperator {
 public:
@@ -19,14 +18,14 @@ public:
 
 public:
 	//! INSERT INTO
-	PhysicalBatchInsert(PhysicalPlan &physical_plan, vector<LogicalType> types, DuckTableEntry &table,
+	PhysicalBatchInsert(PhysicalPlan &physical_plan, vector<LogicalType> types, TableCatalogEntry &table,
 	                    vector<unique_ptr<BoundConstraint>> bound_constraints, idx_t estimated_cardinality);
 	//! CREATE TABLE AS
 	PhysicalBatchInsert(PhysicalPlan &physical_plan, LogicalOperator &op, SchemaCatalogEntry &schema,
 	                    unique_ptr<BoundCreateTableInfo> info, idx_t estimated_cardinality);
 
 	//! The table to insert into
-	optional_ptr<DuckTableEntry> insert_table;
+	optional_ptr<TableCatalogEntry> insert_table;
 	//! The insert types
 	vector<LogicalType> insert_types;
 	//! The bound constraints for the table

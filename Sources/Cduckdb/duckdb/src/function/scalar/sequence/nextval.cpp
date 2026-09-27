@@ -31,20 +31,22 @@ struct NextSequenceValueOperator {
 	}
 };
 
-SequenceCatalogEntry &BindSequence(Binder &binder, QualifiedName name) {
-	// resolve the (optional) catalog/schema qualification and fetch the sequence from the catalog
-	Binder::BindSchemaOrCatalog(binder.context, name);
+SequenceCatalogEntry &BindSequence(Binder &binder, string &catalog, string &schema, const string &name) {
+	// fetch the sequence from the catalog
+	Binder::BindSchemaOrCatalog(binder.context, catalog, schema);
 	EntryLookupInfo sequence_lookup(CatalogType::SEQUENCE_ENTRY, name);
-	return binder.EntryRetriever().GetEntry(sequence_lookup)->Cast<SequenceCatalogEntry>();
+	return binder.EntryRetriever().GetEntry(catalog, schema, sequence_lookup)->Cast<SequenceCatalogEntry>();
 }
 
-SequenceCatalogEntry &BindSequenceFromContext(ClientContext &context, QualifiedName name) {
-	Binder::BindSchemaOrCatalog(context, name);
-	return Catalog::GetEntry<SequenceCatalogEntry>(context, name);
+SequenceCatalogEntry &BindSequenceFromContext(ClientContext &context, string &catalog, string &schema,
+                                              const string &name) {
+	Binder::BindSchemaOrCatalog(context, catalog, schema);
+	return Catalog::GetEntry<SequenceCatalogEntry>(context, catalog, schema, name);
 }
 
-SequenceCatalogEntry &BindSequence(Binder &binder, const Identifier &name) {
-	return BindSequence(binder, QualifiedName::Parse(name.GetIdentifierName()));
+SequenceCatalogEntry &BindSequence(Binder &binder, const string &name) {
+	auto qname = QualifiedName::Parse(name);
+	return BindSequence(binder, qname.catalog, qname.schema, qname.name);
 }
 
 struct NextValLocalState : public FunctionLocalState {
@@ -71,41 +73,49 @@ unique_ptr<FunctionLocalState> NextValLocalFunction(ExpressionState &state, cons
 template <class OP>
 void NextValFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	if (!func_expr.BindInfo()) {
+	if (!func_expr.bind_info) {
 		// no bind info - return null
-		ConstantVector::SetNull(result, count_t(args.size()));
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, true);
 		return;
 	}
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<NextValLocalState>();
 	// sequence to use is hard coded
 	// increment the sequence
 	result.SetVectorType(VectorType::FLAT_VECTOR);
-
-	auto result_data = FlatVector::Writer<int64_t>(result, args.size());
+	auto result_data = FlatVector::GetData<int64_t>(result);
 	for (idx_t i = 0; i < args.size(); i++) {
 		// get the next value from the sequence
-		result_data.WriteValue(OP::Operation(lstate.transaction, lstate.sequence));
+		result_data[i] = OP::Operation(lstate.transaction, lstate.sequence);
 	}
 }
 
-unique_ptr<FunctionData> NextValBind(BindScalarFunctionInput &input) {
+unique_ptr<FunctionData> NextValBind(ScalarFunctionBindInput &bind_input, ScalarFunction &,
+                                     vector<unique_ptr<Expression>> &arguments) {
+	if (arguments[0]->HasParameter() || arguments[0]->return_type.id() == LogicalTypeId::UNKNOWN) {
+		throw ParameterNotResolvedException();
+	}
+	if (!arguments[0]->IsFoldable()) {
+		throw NotImplementedException(
+		    "currval/nextval requires a constant sequence - non-constant sequences are no longer supported");
+	}
+	auto &binder = bind_input.binder;
 	// parameter to nextval function is a foldable constant
 	// evaluate the constant and perform the catalog lookup already
-	const auto seqname = input.GetConstant(0);
+	auto seqname = ExpressionExecutor::EvaluateScalar(binder.context, *arguments[0]);
 	if (seqname.IsNull()) {
 		return nullptr;
 	}
-	auto &binder = input.GetBinder();
-	auto &seq = BindSequence(binder, Identifier(seqname.ToString()));
+	auto &seq = BindSequence(binder, seqname.ToString());
 	return make_uniq<NextvalBindData>(seq);
 }
 
-void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data, const BoundScalarFunction &) {
+void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data, const ScalarFunction &) {
 	auto &next_val_bind_data = bind_data->Cast<NextvalBindData>();
 	serializer.WritePropertyWithDefault(100, "sequence_create_info", next_val_bind_data.create_info);
 }
 
-unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, BoundScalarFunction &) {
+unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, ScalarFunction &) {
 	auto create_info = deserializer.ReadPropertyWithExplicitDefault<unique_ptr<CreateInfo>>(100, "sequence_create_info",
 	                                                                                        unique_ptr<CreateInfo>());
 	if (!create_info) {
@@ -113,7 +123,7 @@ unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, BoundScalarFunc
 	}
 	auto &seq_info = create_info->Cast<CreateSequenceInfo>();
 	auto &context = deserializer.Get<ClientContext &>();
-	auto &sequence = BindSequenceFromContext(context, seq_info.GetQualifiedName());
+	auto &sequence = BindSequenceFromContext(context, seq_info.catalog, seq_info.schema, seq_info.name);
 	return make_uniq<NextvalBindData>(sequence);
 }
 
@@ -128,9 +138,9 @@ void NextValModifiedDatabases(ClientContext &context, FunctionModifiedDatabasesI
 } // namespace
 
 ScalarFunction NextvalFun::GetFunction() {
-	ScalarFunction next_val("nextval", {{"sequence_name", LogicalType::VARCHAR}}, LogicalType::BIGINT,
+	ScalarFunction next_val("nextval", {LogicalType::VARCHAR}, LogicalType::BIGINT,
 	                        NextValFunction<NextSequenceValueOperator>, nullptr, nullptr);
-	next_val.SetBindCallback(NextValBind);
+	next_val.SetBindExtendedCallback(NextValBind);
 	next_val.SetSerializeCallback(Serialize);
 	next_val.SetDeserializeCallback(Deserialize);
 	next_val.SetModifiedDatabasesCallback(NextValModifiedDatabases);
@@ -141,9 +151,9 @@ ScalarFunction NextvalFun::GetFunction() {
 }
 
 ScalarFunction CurrvalFun::GetFunction() {
-	ScalarFunction curr_val("currval", {{"sequence_name", LogicalType::VARCHAR}}, LogicalType::BIGINT,
+	ScalarFunction curr_val("currval", {LogicalType::VARCHAR}, LogicalType::BIGINT,
 	                        NextValFunction<CurrentSequenceValueOperator>, nullptr, nullptr);
-	curr_val.SetBindCallback(NextValBind);
+	curr_val.SetBindExtendedCallback(NextValBind);
 	curr_val.SetSerializeCallback(Serialize);
 	curr_val.SetDeserializeCallback(Deserialize);
 	curr_val.SetInitStateCallback(NextValLocalFunction);

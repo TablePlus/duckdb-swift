@@ -233,12 +233,6 @@ protected:
 		return true;
 	}
 
-public:
-	unique_ptr<MemoryMappedFile> MemoryMapFile(const OpenFileInfo &path, FileOpenFlags flags,
-	                                           const MMapOptions &options,
-	                                           optional_ptr<FileOpener> opener = nullptr) override;
-
-protected:
 	bool ListFilesExtended(const string &directory, const std::function<void(OpenFileInfo &info)> &callback,
 	                       optional_ptr<FileOpener> opener) override {
 		VerifyNoOpener(opener);

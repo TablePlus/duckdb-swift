@@ -6,10 +6,8 @@
 
 namespace duckdb {
 
-static unique_ptr<FunctionData> ListTransformBind(BindScalarFunctionInput &input) {
-	auto &context = input.GetClientContext();
-	auto &bound_function = input.GetBoundFunction();
-	auto &arguments = input.GetArguments();
+static unique_ptr<FunctionData> ListTransformBind(ClientContext &context, ScalarFunction &bound_function,
+                                                  vector<unique_ptr<Expression>> &arguments) {
 	// the list column and the bound lambda expression
 	D_ASSERT(arguments.size() == 2);
 	if (arguments[1]->GetExpressionClass() != ExpressionClass::BOUND_LAMBDA) {
@@ -19,14 +17,13 @@ static unique_ptr<FunctionData> ListTransformBind(BindScalarFunctionInput &input
 	arguments[0] = BoundCastExpression::AddArrayCastToList(context, std::move(arguments[0]));
 
 	auto &bound_lambda_expr = arguments[1]->Cast<BoundLambdaExpression>();
-	bound_function.SetReturnType(LogicalType::LIST(bound_lambda_expr.LambdaExpr()->GetReturnType()));
-	auto has_index = bound_lambda_expr.ParameterCount() == 2;
+	bound_function.SetReturnType(LogicalType::LIST(bound_lambda_expr.lambda_expr->return_type));
+	auto has_index = bound_lambda_expr.parameter_count == 2;
 	return LambdaFunctions::ListLambdaBind(context, bound_function, arguments, has_index);
 }
 
 static LogicalType ListTransformBindLambda(ClientContext &context, const vector<LogicalType> &function_child_types,
-                                           const idx_t parameter_idx,
-                                           optional_ptr<BindLambdaContext> bind_lambda_context) {
+                                           const idx_t parameter_idx) {
 	return LambdaFunctions::BindBinaryChildren(function_child_types, parameter_idx);
 }
 

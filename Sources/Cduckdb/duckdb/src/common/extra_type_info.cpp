@@ -109,13 +109,6 @@ shared_ptr<ExtraTypeInfo> ExtraTypeInfo::DeepCopy() const {
 	return Copy();
 }
 
-void ExtraTypeInfo::CopyBaseInfo(ExtraTypeInfo &target) const {
-	target.alias = alias;
-	if (extension_info) {
-		target.extension_info = make_uniq<ExtensionTypeInfo>(*extension_info);
-	}
-}
-
 bool ExtraTypeInfo::Equals(ExtraTypeInfo *other_p) const {
 	if (type == ExtraTypeInfoType::INVALID_TYPE_INFO || type == ExtraTypeInfoType::STRING_TYPE_INFO ||
 	    type == ExtraTypeInfoType::GENERIC_TYPE_INFO) {
@@ -216,19 +209,13 @@ shared_ptr<ExtraTypeInfo> ListTypeInfo::Copy() const {
 }
 
 shared_ptr<ExtraTypeInfo> ListTypeInfo::DeepCopy() const {
-	auto result = make_shared_ptr<ListTypeInfo>(child_type.DeepCopy());
-	CopyBaseInfo(*result);
-	return result;
+	return make_shared_ptr<ListTypeInfo>(child_type.DeepCopy());
 }
 
 //===--------------------------------------------------------------------===//
 // Struct Type Info
 //===--------------------------------------------------------------------===//
 StructTypeInfo::StructTypeInfo() : ExtraTypeInfo(ExtraTypeInfoType::STRUCT_TYPE_INFO) {
-}
-
-StructTypeInfo::StructTypeInfo(ExtraTypeInfoType type, child_list_t<LogicalType> child_types_p)
-    : ExtraTypeInfo(type), child_types(std::move(child_types_p)) {
 }
 
 StructTypeInfo::StructTypeInfo(child_list_t<LogicalType> child_types_p)
@@ -249,9 +236,28 @@ shared_ptr<ExtraTypeInfo> StructTypeInfo::DeepCopy() const {
 	for (const auto &child_type : child_types) {
 		copied_child_types.emplace_back(child_type.first, child_type.second.DeepCopy());
 	}
-	auto result = make_shared_ptr<StructTypeInfo>(type, std::move(copied_child_types));
-	CopyBaseInfo(*result);
-	return result;
+	return make_shared_ptr<StructTypeInfo>(std::move(copied_child_types));
+}
+
+//===--------------------------------------------------------------------===//
+// Aggregate State Type Info
+//===--------------------------------------------------------------------===//
+AggregateStateTypeInfo::AggregateStateTypeInfo() : ExtraTypeInfo(ExtraTypeInfoType::AGGREGATE_STATE_TYPE_INFO) {
+}
+
+AggregateStateTypeInfo::AggregateStateTypeInfo(aggregate_state_t state_type_p)
+    : ExtraTypeInfo(ExtraTypeInfoType::AGGREGATE_STATE_TYPE_INFO), state_type(std::move(state_type_p)) {
+}
+
+bool AggregateStateTypeInfo::EqualsInternal(ExtraTypeInfo *other_p) const {
+	auto &other = other_p->Cast<AggregateStateTypeInfo>();
+	return state_type.function_name == other.state_type.function_name &&
+	       state_type.return_type == other.state_type.return_type &&
+	       state_type.bound_argument_types == other.state_type.bound_argument_types;
+}
+
+shared_ptr<ExtraTypeInfo> AggregateStateTypeInfo::Copy() const {
+	return make_shared_ptr<AggregateStateTypeInfo>(*this);
 }
 
 //===--------------------------------------------------------------------===//
@@ -260,34 +266,34 @@ shared_ptr<ExtraTypeInfo> StructTypeInfo::DeepCopy() const {
 void UnboundTypeInfo::Serialize(Serializer &serializer) const {
 	ExtraTypeInfo::Serialize(serializer);
 
-	if (serializer.ShouldSerialize(StorageVersion::V1_5_0)) {
+	if (serializer.ShouldSerialize(7)) {
 		serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(204, "expr", expr);
 		return;
 	}
 
 	// Try to write this as an old "USER" type, if possible
-	if (expr->GetExpressionType() != ExpressionType::TYPE) {
+	if (expr->type != ExpressionType::TYPE) {
 		throw SerializationException(
 		    "Cannot serialize non-type type expression when targeting database storage version '%s'",
-		    serializer.GetOptions().storage_compatibility.duckdb_version);
+		    serializer.GetOptions().serialization_compatibility.duckdb_version);
 	}
 
 	auto &type_expr = expr->Cast<TypeExpression>();
-	serializer.WritePropertyWithDefault<string>(200, "name", type_expr.GetTypeName().GetIdentifierName());
-	serializer.WritePropertyWithDefault<string>(201, "catalog", type_expr.GetCatalog().GetIdentifierName());
-	serializer.WritePropertyWithDefault<string>(202, "schema", type_expr.GetSchema().GetIdentifierName());
+	serializer.WritePropertyWithDefault<string>(200, "name", type_expr.GetTypeName());
+	serializer.WritePropertyWithDefault<string>(201, "catalog", type_expr.GetCatalog());
+	serializer.WritePropertyWithDefault<string>(202, "schema", type_expr.GetSchema());
 
 	// Try to write the user type mods too
 	vector<Value> user_type_mods;
 	for (auto &param : type_expr.GetChildren()) {
-		if (param->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+		if (param->type != ExpressionType::VALUE_CONSTANT) {
 			throw SerializationException(
 			    "Cannot serialize non-constant type parameter when targeting serialization version %s",
-			    serializer.GetOptions().storage_compatibility.duckdb_version);
+			    serializer.GetOptions().serialization_compatibility.duckdb_version);
 		}
 
 		auto &const_expr = param->Cast<ConstantExpression>();
-		user_type_mods.push_back(const_expr.GetValue());
+		user_type_mods.push_back(const_expr.value);
 	}
 
 	serializer.WritePropertyWithDefault<vector<Value>>(203, "user_type_modifiers", user_type_mods);
@@ -313,27 +319,10 @@ shared_ptr<ExtraTypeInfo> UnboundTypeInfo::Deserialize(Deserializer &deserialize
 			user_type_mods.push_back(make_uniq_base<ParsedExpression, ConstantExpression>(mod));
 		}
 
-		result->expr = make_uniq<TypeExpression>(
-		    QualifiedName(Identifier(catalog), Identifier(schema), Identifier(name)), std::move(user_type_mods));
+		result->expr = make_uniq<TypeExpression>(catalog, schema, name, std::move(user_type_mods));
 	}
 
 	return std::move(result);
-}
-
-//===--------------------------------------------------------------------===//
-// Legacy Aggregate State Type Info
-//===--------------------------------------------------------------------===//
-LegacyAggregateStateTypeInfo::LegacyAggregateStateTypeInfo()
-    : ExtraTypeInfo(ExtraTypeInfoType::LEGACY_AGGREGATE_STATE_TYPE_INFO) {
-	throw InternalException("LegacyAggregateStateTypeInfo should no longer be getting constructed");
-}
-
-bool LegacyAggregateStateTypeInfo::EqualsInternal(ExtraTypeInfo *other_p) const {
-	throw InternalException("LegacyAggregateStateTypeInfo should no longer be getting constructed");
-}
-
-shared_ptr<ExtraTypeInfo> LegacyAggregateStateTypeInfo::LegacyDeserialize() {
-	return make_shared_ptr<ExtraTypeInfo>(ExtraTypeInfoType::GENERIC_TYPE_INFO);
 }
 
 //===--------------------------------------------------------------------===//
@@ -351,8 +340,8 @@ PhysicalType EnumTypeInfo::DictType(idx_t size) {
 	}
 }
 
-EnumTypeInfo::EnumTypeInfo(const Vector &values_insert_order_p, idx_t dict_size_p)
-    : ExtraTypeInfo(ExtraTypeInfoType::ENUM_TYPE_INFO), values_insert_order(Vector::Ref(values_insert_order_p)),
+EnumTypeInfo::EnumTypeInfo(Vector &values_insert_order_p, idx_t dict_size_p)
+    : ExtraTypeInfo(ExtraTypeInfoType::ENUM_TYPE_INFO), values_insert_order(values_insert_order_p),
       dict_type(EnumDictType::VECTOR_DICT), dict_size(dict_size_p) {
 }
 
@@ -368,22 +357,25 @@ const idx_t &EnumTypeInfo::GetDictSize() const {
 	return dict_size;
 }
 
-shared_ptr<ExtraTypeInfo> EnumTypeInfo::CreateTypeInfo(const Vector &ordered_data, idx_t size) {
+LogicalType EnumTypeInfo::CreateType(Vector &ordered_data, idx_t size) {
+	// Generate EnumTypeInfo
+	shared_ptr<ExtraTypeInfo> info;
 	auto enum_internal_type = EnumTypeInfo::DictType(size);
 	switch (enum_internal_type) {
 	case PhysicalType::UINT8:
-		return make_shared_ptr<EnumTypeInfoTemplated<uint8_t>>(ordered_data, size);
+		info = make_shared_ptr<EnumTypeInfoTemplated<uint8_t>>(ordered_data, size);
+		break;
 	case PhysicalType::UINT16:
-		return make_shared_ptr<EnumTypeInfoTemplated<uint16_t>>(ordered_data, size);
+		info = make_shared_ptr<EnumTypeInfoTemplated<uint16_t>>(ordered_data, size);
+		break;
 	case PhysicalType::UINT32:
-		return make_shared_ptr<EnumTypeInfoTemplated<uint32_t>>(ordered_data, size);
+		info = make_shared_ptr<EnumTypeInfoTemplated<uint32_t>>(ordered_data, size);
+		break;
 	default:
 		throw InternalException("Invalid Physical Type for ENUMs");
 	}
-}
-
-LogicalType EnumTypeInfo::CreateType(const Vector &ordered_data, idx_t size) {
-	return LogicalType(LogicalTypeId::ENUM, CreateTypeInfo(ordered_data, size));
+	// Generate Actual Enum Type
+	return LogicalType(LogicalTypeId::ENUM, info);
 }
 
 template <class T>
@@ -463,10 +455,9 @@ void EnumTypeInfo::Serialize(Serializer &serializer) const {
 }
 
 shared_ptr<ExtraTypeInfo> EnumTypeInfo::Copy() const {
-	// create a templated copy so that the value lookup map is rebuilt - the dictionary itself is shared
-	auto result = CreateTypeInfo(values_insert_order, dict_size);
-	CopyBaseInfo(*result);
-	return result;
+	Vector values_insert_order_copy(LogicalType::VARCHAR, false, false, 0);
+	values_insert_order_copy.Reference(values_insert_order);
+	return make_shared_ptr<EnumTypeInfo>(values_insert_order_copy, dict_size);
 }
 
 //===--------------------------------------------------------------------===//
@@ -487,9 +478,7 @@ shared_ptr<ExtraTypeInfo> ArrayTypeInfo::Copy() const {
 }
 
 shared_ptr<ExtraTypeInfo> ArrayTypeInfo::DeepCopy() const {
-	auto result = make_shared_ptr<ArrayTypeInfo>(child_type.DeepCopy(), size);
-	CopyBaseInfo(*result);
-	return result;
+	return make_shared_ptr<ArrayTypeInfo>(child_type.DeepCopy(), size);
 }
 
 //===--------------------------------------------------------------------===//
@@ -512,9 +501,7 @@ shared_ptr<ExtraTypeInfo> AnyTypeInfo::Copy() const {
 }
 
 shared_ptr<ExtraTypeInfo> AnyTypeInfo::DeepCopy() const {
-	auto result = make_shared_ptr<AnyTypeInfo>(target_type.DeepCopy(), cast_score);
-	CopyBaseInfo(*result);
-	return result;
+	return make_shared_ptr<AnyTypeInfo>(target_type.DeepCopy(), cast_score);
 }
 
 //===--------------------------------------------------------------------===//

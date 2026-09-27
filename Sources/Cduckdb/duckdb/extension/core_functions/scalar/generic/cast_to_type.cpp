@@ -10,7 +10,7 @@ void CastToTypeFunction(DataChunk &args, ExpressionState &state, Vector &result)
 }
 
 unique_ptr<Expression> BindCastToTypeFunction(FunctionBindExpressionInput &input) {
-	auto &return_type = input.children[1]->GetReturnType();
+	auto &return_type = input.children[1]->return_type;
 	if (return_type.id() == LogicalTypeId::UNKNOWN) {
 		// parameter - unknown return type
 		throw ParameterNotResolvedException();

@@ -1,7 +1,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/vector.hpp"
-#include "duckdb/function/compression/compression.hpp"
 #include "duckdb/function/variant/variant_shredding.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
@@ -54,7 +53,6 @@ BaseStatistics::BaseStatistics(BaseStatistics &&other) noexcept {
 	has_no_null = other.has_no_null;
 	distinct_count = other.distinct_count;
 	stats_union = other.stats_union;
-	std::swap(extra_data, other.extra_data);
 	std::swap(child_stats, other.child_stats);
 }
 
@@ -64,7 +62,6 @@ BaseStatistics &BaseStatistics::operator=(BaseStatistics &&other) noexcept {
 	has_no_null = other.has_no_null;
 	distinct_count = other.distinct_count;
 	stats_union = other.stats_union;
-	std::swap(extra_data, other.extra_data);
 	std::swap(child_stats, other.child_stats);
 	return *this;
 }
@@ -93,7 +90,6 @@ StatisticsType BaseStatistics::GetStatsType(const LogicalType &type) {
 	case PhysicalType::UINT128:
 	case PhysicalType::FLOAT:
 	case PhysicalType::DOUBLE:
-	case PhysicalType::INTERVAL:
 		return StatisticsType::NUMERIC_STATS;
 	case PhysicalType::VARCHAR:
 		return StatisticsType::STRING_STATS;
@@ -104,6 +100,7 @@ StatisticsType BaseStatistics::GetStatsType(const LogicalType &type) {
 	case PhysicalType::ARRAY:
 		return StatisticsType::ARRAY_STATS;
 	case PhysicalType::BIT:
+	case PhysicalType::INTERVAL:
 	default:
 		return StatisticsType::BASE_STATS;
 	}
@@ -144,14 +141,14 @@ bool BaseStatistics::IsConstant() const {
 	}
 	switch (GetStatsType()) {
 	case StatisticsType::NUMERIC_STATS:
-		return ConstantFun::TypeIsSupported(type.InternalType()) && NumericStats::IsConstant(*this);
+		return NumericStats::IsConstant(*this);
 	default:
 		break;
 	}
 	return false;
 }
 
-void BaseStatistics::Merge(const BaseStatistics &other, StatsMergeType merge_type) {
+void BaseStatistics::Merge(const BaseStatistics &other) {
 	has_null = has_null || other.has_null;
 	has_no_null = has_no_null || other.has_no_null;
 	switch (GetStatsType()) {
@@ -159,16 +156,16 @@ void BaseStatistics::Merge(const BaseStatistics &other, StatsMergeType merge_typ
 		NumericStats::Merge(*this, other);
 		break;
 	case StatisticsType::STRING_STATS:
-		StringStats::Merge(*this, other, merge_type);
+		StringStats::Merge(*this, other);
 		break;
 	case StatisticsType::LIST_STATS:
-		ListStats::Merge(*this, other, merge_type);
+		ListStats::Merge(*this, other);
 		break;
 	case StatisticsType::STRUCT_STATS:
-		StructStats::Merge(*this, other, merge_type);
+		StructStats::Merge(*this, other);
 		break;
 	case StatisticsType::ARRAY_STATS:
-		ArrayStats::Merge(*this, other, merge_type);
+		ArrayStats::Merge(*this, other);
 		break;
 	case StatisticsType::GEOMETRY_STATS:
 		GeometryStats::Merge(*this, other);
@@ -265,9 +262,6 @@ void BaseStatistics::Copy(const BaseStatistics &other) {
 		break;
 	case StatisticsType::VARIANT_STATS:
 		VariantStats::Copy(*this, other);
-		break;
-	case StatisticsType::STRING_STATS:
-		StringStats::Copy(*this, other);
 		break;
 	default:
 		break;
@@ -446,47 +440,41 @@ BaseStatistics BaseStatistics::Deserialize(Deserializer &deserializer) {
 	return stats;
 }
 
-Value BaseStatistics::ToStruct() const {
-	child_list_t<Value> children;
+string BaseStatistics::ToString() const {
+	auto has_n = has_null ? "true" : "false";
+	auto has_n_n = has_no_null ? "true" : "false";
+	string result =
+	    StringUtil::Format("%s%s", StringUtil::Format("[Has Null: %s, Has No Null: %s]", has_n, has_n_n),
+	                       distinct_count > 0 ? StringUtil::Format("[Approx Unique: %lld]", distinct_count) : "");
 	switch (GetStatsType()) {
 	case StatisticsType::NUMERIC_STATS:
-		children = NumericStats::ToStruct(*this);
+		result = NumericStats::ToString(*this) + result;
 		break;
 	case StatisticsType::STRING_STATS:
-		children = StringStats::ToStruct(*this);
+		result = StringStats::ToString(*this) + result;
 		break;
 	case StatisticsType::LIST_STATS:
-		children = ListStats::ToStruct(*this);
+		result = ListStats::ToString(*this) + result;
 		break;
 	case StatisticsType::STRUCT_STATS:
-		children = StructStats::ToStruct(*this);
+		result = StructStats::ToString(*this) + result;
 		break;
 	case StatisticsType::ARRAY_STATS:
-		children = ArrayStats::ToStruct(*this);
+		result = ArrayStats::ToString(*this) + result;
 		break;
 	case StatisticsType::GEOMETRY_STATS:
-		children = GeometryStats::ToStruct(*this);
+		result = GeometryStats::ToString(*this) + result;
 		break;
 	case StatisticsType::VARIANT_STATS:
-		children = VariantStats::ToStruct(*this);
+		result = VariantStats::ToString(*this) + result;
 		break;
 	default:
 		break;
 	}
-	children.emplace_back("has_null", Value::BOOLEAN(has_null));
-	children.emplace_back("has_no_null", Value::BOOLEAN(has_no_null));
-	if (distinct_count > 0) {
-		children.emplace_back("approx_unique", Value::UBIGINT(distinct_count));
-	}
-	return Value::STRUCT(std::move(children));
+	return result;
 }
 
-string BaseStatistics::ToString() const {
-	return ToStruct().ToString();
-}
-
-void BaseStatistics::Verify(const Vector &vector, const SelectionVector &sel, idx_t count,
-                            const bool ignore_has_null) const {
+void BaseStatistics::Verify(Vector &vector, const SelectionVector &sel, idx_t count, const bool ignore_has_null) const {
 	D_ASSERT(vector.GetType() == this->type);
 	switch (GetStatsType()) {
 	case StatisticsType::NUMERIC_STATS:
@@ -517,24 +505,26 @@ void BaseStatistics::Verify(const Vector &vector, const SelectionVector &sel, id
 		// nothing to verify
 		return;
 	}
-	auto validity_entries = vector.Validity();
+	UnifiedVectorFormat vdata;
+	vector.ToUnifiedFormat(count, vdata);
 	for (idx_t i = 0; i < count; i++) {
 		auto idx = sel.get_index(i);
-		bool row_is_valid = validity_entries.IsValid(idx);
+		auto index = vdata.sel->get_index(idx);
+		bool row_is_valid = vdata.validity.RowIsValid(index);
 		if (row_is_valid && !has_no_null) {
 			throw InternalException(
 			    "Statistics mismatch: vector labeled as having only NULL values, but vector contains valid values: %s",
-			    vector.ToString());
+			    vector.ToString(count));
 		}
 		if (!row_is_valid && !has_null && !ignore_has_null) {
 			throw InternalException(
 			    "Statistics mismatch: vector labeled as not having NULL values, but vector contains null values: %s",
-			    vector.ToString());
+			    vector.ToString(count));
 		}
 	}
 }
 
-void BaseStatistics::Verify(const Vector &vector, idx_t count) const {
+void BaseStatistics::Verify(Vector &vector, idx_t count) const {
 	auto sel = FlatVector::IncrementalSelectionVector();
 	Verify(vector, *sel, count, false);
 }
@@ -551,7 +541,7 @@ BaseStatistics BaseStatistics::FromConstantType(const Value &input) {
 		auto result = StringStats::CreateEmpty(input.type());
 		if (!input.IsNull()) {
 			auto &string_value = StringValue::Get(input);
-			StringStats::FromConstant(result, string_t(string_value));
+			StringStats::Update(result, string_t(string_value));
 		}
 		return result;
 	}

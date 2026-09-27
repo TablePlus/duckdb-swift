@@ -3,7 +3,6 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/parser/parsed_data/alter_table_function_info.hpp"
-#include "duckdb/catalog/catalog.hpp"
 
 namespace duckdb {
 
@@ -14,8 +13,8 @@ TableFunctionCatalogEntry::TableFunctionCatalogEntry(Catalog &catalog, SchemaCat
     : FunctionEntry(CatalogType::TABLE_FUNCTION_ENTRY, catalog, schema, info), functions(std::move(info.functions)) {
 	D_ASSERT(this->functions.Size() > 0);
 	for (auto &function : functions.functions) {
-		function.SetCatalogName(catalog.GetAttached().GetName());
-		function.SetSchemaName(schema.name);
+		function.catalog_name = catalog.GetAttached().GetName();
+		function.schema_name = schema.name;
 	}
 }
 

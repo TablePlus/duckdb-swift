@@ -14,13 +14,12 @@ namespace duckdb {
 
 class CreateViewRelation : public Relation {
 public:
-	CreateViewRelation(shared_ptr<Relation> child, Identifier view_name, bool replace, bool temporary);
-	CreateViewRelation(shared_ptr<Relation> child, Identifier schema_name, Identifier view_name, bool replace,
-	                   bool temporary);
+	CreateViewRelation(shared_ptr<Relation> child, string view_name, bool replace, bool temporary);
+	CreateViewRelation(shared_ptr<Relation> child, string schema_name, string view_name, bool replace, bool temporary);
 
 	shared_ptr<Relation> child;
-	Identifier schema_name;
-	Identifier view_name;
+	string schema_name;
+	string view_name;
 	bool replace;
 	bool temporary;
 	vector<ColumnDefinition> columns;

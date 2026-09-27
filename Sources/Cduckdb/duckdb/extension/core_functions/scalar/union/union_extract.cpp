@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/union_vector.hpp"
 #include "core_functions/scalar/union_functions.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -10,7 +9,7 @@ namespace duckdb {
 namespace {
 
 struct UnionExtractBindData : public FunctionData {
-	UnionExtractBindData(Identifier key, idx_t index, LogicalType type)
+	UnionExtractBindData(string key, idx_t index, LogicalType type)
 	    : key(std::move(key)), index(index), type(std::move(type)) {
 	}
 
@@ -20,7 +19,7 @@ struct UnionExtractBindData : public FunctionData {
 
 public:
 	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<UnionExtractBindData>(Identifier(key), index, type);
+		return make_uniq<UnionExtractBindData>(key, index, type);
 	}
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = other_p.Cast<UnionExtractBindData>();
@@ -30,52 +29,59 @@ public:
 
 void UnionExtractFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &info = func_expr.BindInfo()->Cast<UnionExtractBindData>();
+	auto &info = func_expr.bind_info->Cast<UnionExtractBindData>();
 
 	// this should be guaranteed by the binder
-	const auto &vec = args.data[0];
-	vec.Verify();
+	auto &vec = args.data[0];
+	vec.Verify(args.size());
 
 	D_ASSERT(info.index < UnionType::GetMemberCount(vec.GetType()));
 	auto &member = UnionVector::GetMember(vec, info.index);
 	result.Reference(member);
-	result.Verify();
+	result.Verify(args.size());
 }
 
-unique_ptr<FunctionData> UnionExtractBind(BindScalarFunctionInput &input) {
-	auto &bound_function = input.GetBoundFunction();
-	auto &arguments = input.GetArguments();
-	D_ASSERT(bound_function.GetArguments().size() == 2);
-	if (arguments[0]->GetReturnType().id() == LogicalTypeId::UNKNOWN) {
+unique_ptr<FunctionData> UnionExtractBind(ClientContext &context, ScalarFunction &bound_function,
+                                          vector<unique_ptr<Expression>> &arguments) {
+	D_ASSERT(bound_function.arguments.size() == 2);
+	if (arguments[0]->return_type.id() == LogicalTypeId::UNKNOWN) {
 		throw ParameterNotResolvedException();
 	}
-	if (arguments[0]->GetReturnType().id() != LogicalTypeId::UNION) {
+	if (arguments[0]->return_type.id() != LogicalTypeId::UNION) {
 		throw BinderException("union_extract can only take a union parameter");
 	}
-	idx_t union_member_count = UnionType::GetMemberCount(arguments[0]->GetReturnType());
+	idx_t union_member_count = UnionType::GetMemberCount(arguments[0]->return_type);
 	if (union_member_count == 0) {
 		throw InternalException("Can't extract something from an empty union");
 	}
-	bound_function.GetArguments()[0] = arguments[0]->GetReturnType();
+	bound_function.arguments[0] = arguments[0]->return_type;
 
-	auto key_val = input.GetNonNullConstant(1);
+	auto &key_child = arguments[1];
+	if (key_child->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+
+	if (key_child->return_type.id() != LogicalTypeId::VARCHAR || !key_child->IsFoldable()) {
+		throw BinderException("Key name for union_extract needs to be a constant string");
+	}
+	Value key_val = ExpressionExecutor::EvaluateScalar(context, *key_child);
 	D_ASSERT(key_val.type().id() == LogicalTypeId::VARCHAR);
 	auto &key_str = StringValue::Get(key_val);
-	if (key_str.empty()) {
-		throw BinderException("Key name for union_extract must not be empty");
+	if (key_val.IsNull() || key_str.empty()) {
+		throw BinderException("Key name for union_extract needs to be neither NULL nor empty");
 	}
-	auto key = Identifier(key_str);
+	string key = StringUtil::Lower(key_str);
 
 	LogicalType return_type;
 	idx_t key_index = 0;
 	bool found_key = false;
 
 	for (size_t i = 0; i < union_member_count; i++) {
-		auto &member_name = UnionType::GetMemberName(arguments[0]->GetReturnType(), i);
-		if (member_name == key) {
+		auto &member_name = UnionType::GetMemberName(arguments[0]->return_type, i);
+		if (StringUtil::Lower(member_name) == key) {
 			found_key = true;
 			key_index = i;
-			return_type = UnionType::GetMemberType(arguments[0]->GetReturnType(), i);
+			return_type = UnionType::GetMemberType(arguments[0]->return_type, i);
 			break;
 		}
 	}
@@ -84,11 +90,11 @@ unique_ptr<FunctionData> UnionExtractBind(BindScalarFunctionInput &input) {
 		vector<string> candidates;
 		candidates.reserve(union_member_count);
 		for (idx_t i = 0; i < union_member_count; i++) {
-			candidates.emplace_back(UnionType::GetMemberName(arguments[0]->GetReturnType(), i));
+			candidates.push_back(UnionType::GetMemberName(arguments[0]->return_type, i));
 		}
 		auto closest_settings = StringUtil::TopNJaroWinkler(candidates, key);
 		auto message = StringUtil::CandidatesMessage(closest_settings, "Candidate Entries");
-		throw BinderException("Could not find key \"%s\" in union\n%s", key.GetIdentifierName(), message);
+		throw BinderException("Could not find key \"%s\" in union\n%s", key, message);
 	}
 
 	bound_function.SetReturnType(return_type);
@@ -99,8 +105,8 @@ unique_ptr<FunctionData> UnionExtractBind(BindScalarFunctionInput &input) {
 
 ScalarFunction UnionExtractFun::GetFunction() {
 	// the arguments and return types are actually set in the binder function
-	return ScalarFunction({{"union", LogicalTypeId::UNION}, {"tag", LogicalType::VARCHAR}}, LogicalType::ANY,
-	                      UnionExtractFunction, UnionExtractBind, nullptr, nullptr);
+	return ScalarFunction({LogicalTypeId::UNION, LogicalType::VARCHAR}, LogicalType::ANY, UnionExtractFunction,
+	                      UnionExtractBind, nullptr, nullptr);
 }
 
 } // namespace duckdb

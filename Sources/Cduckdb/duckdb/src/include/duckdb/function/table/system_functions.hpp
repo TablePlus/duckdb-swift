@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/function/table_function.hpp"
-#include "duckdb/parser/column_definition.hpp"
 #include "duckdb/function/built_in_functions.hpp"
 
 namespace duckdb {
@@ -19,7 +18,7 @@ struct PragmaCollations {
 };
 
 struct PragmaTableInfo {
-	static void GetColumnInfo(TableCatalogEntry &table, const ColumnDefinition &column, DataChunk &output);
+	static void GetColumnInfo(TableCatalogEntry &table, const ColumnDefinition &column, DataChunk &output, idx_t index);
 
 	static void RegisterFunction(BuiltinFunctions &set);
 };
@@ -88,34 +87,6 @@ struct DuckDBExtensionsFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
-struct RegisterExternalResourceTypeFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct CreateExternalResourceFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct DestroyExternalResourceFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct RegisterExternalResourceFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct DeregisterExternalResourceFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct DuckDBExternalResourceTypesFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct DuckDBExternalResourcesFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
 struct DuckDBPreparedStatementsFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
@@ -144,15 +115,7 @@ struct DuckDBMemoryFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
-struct DuckDBEvictionQueuesFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
 struct DuckDBExternalFileCacheFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct DuckDBMetricsFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
@@ -165,10 +128,6 @@ struct DuckDBSecretTypesFun {
 };
 
 struct DuckDBSequencesFun {
-	static void RegisterFunction(BuiltinFunctions &set);
-};
-
-struct DuckDBTriggersFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 

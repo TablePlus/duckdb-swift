@@ -2,7 +2,6 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection_manager.hpp"
-#include "duckdb/main/settings.hpp"
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
@@ -21,19 +20,19 @@ TemporaryMemoryState::~TemporaryMemoryState() {
 }
 
 void TemporaryMemoryState::SetRemainingSize(idx_t new_remaining_size) {
-	const annotated_lock_guard<annotated_mutex> guard(temporary_memory_manager.lock);
+	auto guard = temporary_memory_manager.Lock();
 	temporary_memory_manager.SetRemainingSize(*this, new_remaining_size);
 }
 
 void TemporaryMemoryState::SetRemainingSizeAndUpdateReservation(ClientContext &context, idx_t new_remaining_size) {
 	D_ASSERT(new_remaining_size != 0); // Use SetZero instead
-	const annotated_lock_guard<annotated_mutex> guard(temporary_memory_manager.lock);
+	auto guard = temporary_memory_manager.Lock();
 	temporary_memory_manager.SetRemainingSize(*this, new_remaining_size);
 	temporary_memory_manager.UpdateState(context, *this);
 }
 
 void TemporaryMemoryState::SetZero() {
-	const annotated_lock_guard<annotated_mutex> guard(temporary_memory_manager.lock);
+	auto guard = temporary_memory_manager.Lock();
 	temporary_memory_manager.SetRemainingSize(*this, 0);
 	temporary_memory_manager.SetReservation(*this, 0);
 }
@@ -51,7 +50,7 @@ idx_t TemporaryMemoryState::GetMinimumReservation() const {
 }
 
 void TemporaryMemoryState::UpdateReservation(ClientContext &context) {
-	const annotated_lock_guard<annotated_mutex> guard(temporary_memory_manager.lock);
+	auto guard = temporary_memory_manager.Lock();
 	temporary_memory_manager.UpdateState(context, *this);
 }
 
@@ -60,7 +59,7 @@ idx_t TemporaryMemoryState::GetReservation() const {
 }
 
 void TemporaryMemoryState::SetMaterializationPenalty(idx_t new_materialization_penalty) {
-	const annotated_lock_guard<annotated_mutex> guard(temporary_memory_manager.lock);
+	auto guard = temporary_memory_manager.Lock();
 	materialization_penalty = new_materialization_penalty;
 }
 
@@ -71,21 +70,17 @@ idx_t TemporaryMemoryState::GetMaterializationPenalty() const {
 TemporaryMemoryManager::TemporaryMemoryManager() : reservation(0), remaining_size(0) {
 }
 
+unique_lock<mutex> TemporaryMemoryManager::Lock() {
+	return unique_lock<mutex>(lock);
+}
+
 idx_t TemporaryMemoryManager::DefaultMinimumReservation() const {
 	return MinValue(num_threads * MINIMUM_RESERVATION_PER_STATE_PER_THREAD,
 	                memory_limit / MINIMUM_RESERVATION_MEMORY_LIMIT_DIVISOR);
 }
 
-idx_t TemporaryMemoryManager::CapReservation(idx_t reservation) const {
-	return MinValue(reservation, memory_limit);
-}
-
-idx_t TemporaryMemoryManager::MinimumReservation(const TemporaryMemoryState &temporary_memory_state) const {
-	return CapReservation(temporary_memory_state.GetMinimumReservation());
-}
-
 void TemporaryMemoryManager::Unregister(TemporaryMemoryState &temporary_memory_state) {
-	const annotated_lock_guard<annotated_mutex> guard(lock);
+	auto guard = Lock();
 
 	SetReservation(temporary_memory_state, 0);
 	SetRemainingSize(temporary_memory_state, 0);
@@ -101,9 +96,9 @@ void TemporaryMemoryManager::UpdateConfiguration(ClientContext &context) {
 	memory_limit =
 	    LossyNumericCast<idx_t>(MAXIMUM_MEMORY_LIMIT_RATIO * static_cast<double>(buffer_manager.GetMaxMemory()));
 	has_temporary_directory = buffer_manager.HasTemporaryDirectory();
-	num_threads = task_scheduler.NumberOfThreads();
+	num_threads = NumericCast<idx_t>(task_scheduler.NumberOfThreads());
 	num_connections = ConnectionManager::Get(context).GetConnectionCount();
-	query_max_memory = buffer_manager.GetOperatorMemoryLimit();
+	query_max_memory = buffer_manager.GetQueryMaxMemory();
 }
 
 TemporaryMemoryManager &TemporaryMemoryManager::Get(ClientContext &context) {
@@ -111,12 +106,12 @@ TemporaryMemoryManager &TemporaryMemoryManager::Get(ClientContext &context) {
 }
 
 unique_ptr<TemporaryMemoryState> TemporaryMemoryManager::Register(ClientContext &context) {
-	const annotated_lock_guard<annotated_mutex> guard(lock);
+	auto guard = Lock();
 	UpdateConfiguration(context);
 
 	auto result = unique_ptr<TemporaryMemoryState>(new TemporaryMemoryState(*this, DefaultMinimumReservation()));
-	SetRemainingSize(*result, MinimumReservation(*result));
-	SetReservation(*result, MinimumReservation(*result));
+	SetRemainingSize(*result, result->GetMinimumReservation());
+	SetReservation(*result, result->GetMinimumReservation());
 	active_states.insert(*result);
 
 	Verify();
@@ -128,12 +123,12 @@ void TemporaryMemoryManager::UpdateState(ClientContext &context, TemporaryMemory
 
 	// The lower bound for the reservation of this state is either the minimum reservation or the remaining size
 	const auto lower_bound =
-	    MinValue(MinimumReservation(temporary_memory_state), temporary_memory_state.GetRemainingSize());
+	    MinValue(temporary_memory_state.GetMinimumReservation(), temporary_memory_state.GetRemainingSize());
 
 	if (temporary_memory_state.GetRemainingSize() == 0) {
 		// Sometimes set to 0 to denote end of state (before actually deleting the state)
 		SetReservation(temporary_memory_state, 0);
-	} else if (Settings::Get<DebugForceExternalSetting>(context)) {
+	} else if (context.config.force_external) {
 		// We're forcing external processing. Give it the minimum
 		SetReservation(temporary_memory_state, lower_bound);
 	} else if (!has_temporary_directory) {
@@ -174,21 +169,20 @@ void TemporaryMemoryManager::SetRemainingSize(TemporaryMemoryState &temporary_me
 }
 
 void TemporaryMemoryManager::SetReservation(TemporaryMemoryState &temporary_memory_state, idx_t new_reservation) {
-	new_reservation = CapReservation(new_reservation);
 	D_ASSERT(this->reservation >= temporary_memory_state.GetReservation());
 	this->reservation -= temporary_memory_state.GetReservation();
 	temporary_memory_state.reservation = new_reservation;
 	this->reservation += temporary_memory_state.GetReservation();
 }
 
-idx_t TemporaryMemoryManager::ComputeInitialReservation(const TemporaryMemoryState &temporary_memory_state) const {
+//! Compute initial reservation for use in ComputeReservation
+static idx_t ComputeInitialReservation(const TemporaryMemoryState &temporary_memory_state) {
 	// Maximum of minimum reservation and the current reservation
-	auto result =
-	    MaxValue(MinimumReservation(temporary_memory_state), CapReservation(temporary_memory_state.GetReservation()));
+	auto result = MaxValue(temporary_memory_state.GetMinimumReservation(), temporary_memory_state.GetReservation());
 	// Bounded by the remaining size
 	result = MinValue(result, temporary_memory_state.GetRemainingSize());
 	// At least 1
-	return MaxValue<idx_t>(result, MinValue<idx_t>(memory_limit, 1));
+	return MaxValue<idx_t>(result, 1);
 }
 
 static void ComputeDerivatives(const vector<reference<const TemporaryMemoryState>> &states, const vector<idx_t> &res,

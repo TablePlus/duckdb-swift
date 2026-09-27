@@ -13,12 +13,6 @@
 #line 0 "src/optimizer/rule/constant_folding.cpp"
 #include "src/optimizer/rule/constant_folding.cpp"
 
-#line 0 "src/optimizer/rule/constant_order_normalization.cpp"
-#include "src/optimizer/rule/constant_order_normalization.cpp"
-
-#line 0 "src/optimizer/rule/contains_to_in_clause.cpp"
-#include "src/optimizer/rule/contains_to_in_clause.cpp"
-
 #line 0 "src/optimizer/rule/date_part_simplification.cpp"
 #include "src/optimizer/rule/date_part_simplification.cpp"
 
@@ -49,20 +43,8 @@
 #line 0 "src/optimizer/rule/like_optimizations.cpp"
 #include "src/optimizer/rule/like_optimizations.cpp"
 
-#line 0 "src/optimizer/rule/list_comprehension_rewrite.cpp"
-#include "src/optimizer/rule/list_comprehension_rewrite.cpp"
-
-#line 0 "src/optimizer/rule/monotone_preimage.cpp"
-#include "src/optimizer/rule/monotone_preimage.cpp"
-
 #line 0 "src/optimizer/rule/move_constants.cpp"
 #include "src/optimizer/rule/move_constants.cpp"
-
-#line 0 "src/optimizer/rule/not_comparison_simplification.cpp"
-#include "src/optimizer/rule/not_comparison_simplification.cpp"
-
-#line 0 "src/optimizer/rule/not_conjunction_simplification.cpp"
-#include "src/optimizer/rule/not_conjunction_simplification.cpp"
 
 #line 0 "src/optimizer/rule/ordered_aggregate_optimizer.cpp"
 #include "src/optimizer/rule/ordered_aggregate_optimizer.cpp"
@@ -73,9 +55,9 @@
 #line 0 "src/optimizer/rule/regex_optimizations.cpp"
 #include "src/optimizer/rule/regex_optimizations.cpp"
 
-#line 0 "src/optimizer/rule/string_prefix.cpp"
-#include "src/optimizer/rule/string_prefix.cpp"
-
 #line 0 "src/optimizer/rule/timestamp_comparison.cpp"
 #include "src/optimizer/rule/timestamp_comparison.cpp"
+
+#line 0 "src/optimizer/rule/constant_order_normalization.cpp"
+#include "src/optimizer/rule/constant_order_normalization.cpp"
 

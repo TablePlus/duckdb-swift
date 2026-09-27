@@ -6,7 +6,6 @@
 #include "duckdb/storage/compression/dict_fsst/analyze.hpp"
 #include "duckdb/function/compression_function.hpp"
 #include "duckdb/common/bitpacking.hpp"
-#include "duckdb/storage/compression/standard_compression_state.hpp"
 #include "duckdb/storage/table/column_data_checkpointer.hpp"
 
 namespace duckdb {
@@ -31,12 +30,10 @@ struct EncodedInput {
 	vector<string_t> data;
 };
 
-enum class DictFSSTCompressResult : uint8_t { FAILED, NEW_STRING, REPEATED_STRING };
-
 //===--------------------------------------------------------------------===//
 // Compress
 //===--------------------------------------------------------------------===//
-struct DictFSSTCompressionState : public StandardCompressionState {
+struct DictFSSTCompressionState : public CompressionState {
 public:
 	DictFSSTCompressionState(ColumnDataCheckpointData &checkpoint_data_p, unique_ptr<DictFSSTAnalyzeState> &&state);
 	~DictFSSTCompressionState() override;
@@ -50,15 +47,18 @@ public:
 	idx_t CalculateRequiredSpace() const;
 	DictionaryAppendState TryEncode();
 
-	DictFSSTCompressResult CompressInternal(UnifiedVectorFormat &vector_format, const string_t &str, bool is_null,
-	                                        EncodedInput &encoded_input, const idx_t i, idx_t count,
-	                                        bool fail_on_no_space);
-	void Compress(const Vector &scan_vector);
+	bool CompressInternal(UnifiedVectorFormat &vector_format, const string_t &str, bool is_null,
+	                      EncodedInput &encoded_input, const idx_t i, idx_t count, bool fail_on_no_space);
+	void Compress(Vector &scan_vector, idx_t count);
 	void FinalizeCompress();
 	void Flush(bool final);
 
 public:
-	StatsWriter<string_t> stats_writer;
+	ColumnDataCheckpointData &checkpoint_data;
+	const CompressionFunction &function;
+	// State regarding current segment
+	unique_ptr<ColumnSegment> current_segment;
+	BufferHandle current_handle;
 	//! Offset at which to write the next dictionary string
 	idx_t dictionary_offset = 0;
 
@@ -93,7 +93,6 @@ public:
 
 	//! How many values have we compressed so far?
 	idx_t total_tuple_count = 0;
-	bool verify_compression = false;
 
 private:
 	void *encoder = nullptr;

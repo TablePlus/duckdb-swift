@@ -1,7 +1,6 @@
 // taken from: https://github.com/yhirose/cpp-httplib/blob/v0.27.0/httplib.h
 // Note: some modifications are made to file (replace std::regex with RE2)
 // Patched CreateFile2 for lower Windows versions
-// Security fixes from newer upstream releases are backported in DuckDB git history
 
 //
 //  httplib.h
@@ -4313,16 +4312,7 @@ inline constexpr unsigned int str2tag_core(const char *s, size_t l,
 }
 
 inline unsigned int str2tag(const std::string &s) {
-  // Iterative form of str2tag_core: the recursive constexpr version is kept
-  // for compile-time UDL evaluation of short string literals, but at runtime
-  // we may receive arbitrarily long inputs (e.g. fuzzed Content-Type) that
-  // would blow the stack with one frame per character.
-  unsigned int h = 0;
-  for (auto c : s) {
-    h = (((std::numeric_limits<unsigned int>::max)() >> 6) & h * 33) ^
-        static_cast<unsigned char>(c);
-  }
-  return h;
+  return str2tag_core(s.data(), s.size(), 0);
 }
 
 namespace udl {
@@ -4777,11 +4767,12 @@ inline bool parse_header(const char *beg, const char *end, T fn) {
 
     if (!detail::fields::is_field_value(val)) { return false; }
 
-    // RFC 9110 §5.5: header field values are opaque octets and MUST NOT be
-    // percent-decoded by the recipient. Applications that need to interpret a
-    // value as a URI component should call httplib::decode_uri_component()
-    // (or decode_path_component()) explicitly.
-    fn(key, val);
+    if (case_ignore::equal(key, "Location") ||
+        case_ignore::equal(key, "Referer")) {
+      fn(key, val);
+    } else {
+      fn(key, decode_path_component(val));
+    }
 
     return true;
   }
@@ -5032,8 +5023,7 @@ inline bool is_chunked_transfer_encoding(const Headers &headers) {
 template <typename T, typename U>
 bool prepare_content_receiver(T &x, int &status,
                               ContentReceiverWithProgress receiver,
-                              bool decompress, size_t payload_max_length,
-                              bool &exceed_payload_max_length, U callback) {
+                              bool decompress, U callback) {
   if (decompress) {
     std::string encoding = x.get_header_value("Content-Encoding");
     duckdb::unique_ptr<decompressor> decompressor;
@@ -5063,22 +5053,10 @@ bool prepare_content_receiver(T &x, int &status,
 
     if (decompressor) {
       if (decompressor->is_valid()) {
-        size_t decompressed_size = 0;
         ContentReceiverWithProgress out = [&](const char *buf, size_t n,
                                               size_t off, size_t len) {
           return decompressor->decompress(buf, n,
                                           [&](const char *buf2, size_t n2) {
-                                            // Guard against zip-bomb: check
-                                            // decompressed size against limit.
-                                            if (payload_max_length > 0 &&
-                                                (decompressed_size >=
-                                                     payload_max_length ||
-                                                 n2 > payload_max_length -
-                                                          decompressed_size)) {
-                                              exceed_payload_max_length = true;
-                                              return false;
-                                            }
-                                            decompressed_size += n2;
                                             return receiver(buf2, n2, off, len);
                                           });
         };
@@ -5101,14 +5079,11 @@ template <typename T>
 bool read_content(Stream &strm, T &x, size_t payload_max_length, int &status,
                   DownloadProgress progress,
                   ContentReceiverWithProgress receiver, bool decompress) {
-  bool exceed_payload_max_length = false;
   return prepare_content_receiver(
-      x, status, std::move(receiver), decompress, payload_max_length,
-      exceed_payload_max_length, [&](const ContentReceiverWithProgress &out) {
+      x, status, std::move(receiver), decompress,
+      [&](const ContentReceiverWithProgress &out) {
         auto ret = true;
-        // Note: exceed_payload_max_length may also be set by the decompressor
-        // wrapper in prepare_content_receiver when the decompressed payload
-        // size exceeds the limit.
+        auto exceed_payload_max_length = false;
 
         if (is_chunked_transfer_encoding(x.headers)) {
           auto result = read_content_chunked(strm, x, payload_max_length, out);
@@ -7425,23 +7400,6 @@ inline std::string make_host_and_port_string(const std::string &host, int port,
   return result;
 }
 
-template <typename T>
-inline bool check_and_write_headers(Stream &strm, Headers &headers,
-                                    T header_writer, Error &error) {
-  for (const auto &h : headers) {
-    if (!detail::fields::is_field_name(h.first) ||
-        !detail::fields::is_field_value(h.second)) {
-      error = Error::InvalidHeaders;
-      return false;
-    }
-  }
-  if (header_writer(strm, headers) <= 0) {
-    error = Error::Write;
-    return false;
-  }
-  return true;
-}
-
 } // namespace detail
 
 // HTTP server implementation
@@ -7845,7 +7803,7 @@ inline bool Server::write_response_core(Stream &strm, bool close_connection,
   {
     detail::BufferStream bstrm;
     if (!detail::write_response_line(bstrm, res.status)) { return false; }
-    if (header_writer_(bstrm, res.headers) <= 0) { return false; }
+    if (!header_writer_(bstrm, res.headers)) { return false; }
 
     // Flush buffer
     auto &data = bstrm.get_buffer();
@@ -8226,61 +8184,47 @@ inline bool Server::routing(Request &req, Response &res, Stream &strm) {
 
   if (detail::expect_content(req)) {
     // Content reader handler
-    // Track whether the ContentReader was aborted due to the decompressed
-    // payload exceeding `payload_max_length_`.
-    // The user handler runs after the lambda returns, so we must restore the
-    // 413 status if the handler overwrites it.
-    bool content_reader_payload_too_large = false;
-    ContentReader reader(
-        [&](ContentReceiver receiver) {
-          auto result = read_content_with_content_receiver(
-              strm, req, res, std::move(receiver), nullptr, nullptr);
-          if (!result) {
-            output_error_log(Error::Read, &req);
-            if (res.status == StatusCode::PayloadTooLarge_413) {
-              content_reader_payload_too_large = true;
-            }
-          }
-          return result;
-        },
-        [&](FormDataHeader header, ContentReceiver receiver) {
-          auto result = read_content_with_content_receiver(
-              strm, req, res, nullptr, std::move(header),
-              std::move(receiver));
-          if (!result) {
-            output_error_log(Error::Read, &req);
-            if (res.status == StatusCode::PayloadTooLarge_413) {
-              content_reader_payload_too_large = true;
-            }
-          }
-          return result;
-        });
-    bool dispatched = false;
-    if (req.method == "POST") {
-      dispatched = dispatch_request_for_content_reader(
-          req, res, std::move(reader), post_handlers_for_content_reader_);
-    } else if (req.method == "PUT") {
-      dispatched = dispatch_request_for_content_reader(
-          req, res, std::move(reader), put_handlers_for_content_reader_);
-    } else if (req.method == "PATCH") {
-      dispatched = dispatch_request_for_content_reader(
-          req, res, std::move(reader), patch_handlers_for_content_reader_);
-    } else if (req.method == "DELETE") {
-      dispatched = dispatch_request_for_content_reader(
-          req, res, std::move(reader), delete_handlers_for_content_reader_);
-    }
+    {
+      ContentReader reader(
+          [&](ContentReceiver receiver) {
+            auto result = read_content_with_content_receiver(
+                strm, req, res, std::move(receiver), nullptr, nullptr);
+            if (!result) { output_error_log(Error::Read, &req); }
+            return result;
+          },
+          [&](FormDataHeader header, ContentReceiver receiver) {
+            auto result = read_content_with_content_receiver(
+                strm, req, res, nullptr, std::move(header),
+                std::move(receiver));
+            if (!result) { output_error_log(Error::Read, &req); }
+            return result;
+          });
 
-    if (dispatched) {
-      if (content_reader_payload_too_large) {
-        // Enforce the limit: override any status the handler may have set
-        // and return false so the error path sends a plain 413 response.
-        res.status = StatusCode::PayloadTooLarge_413;
-        res.body.clear();
-        res.content_length_ = 0;
-        res.content_provider_ = nullptr;
-        return false;
+      if (req.method == "POST") {
+        if (dispatch_request_for_content_reader(
+                req, res, std::move(reader),
+                post_handlers_for_content_reader_)) {
+          return true;
+        }
+      } else if (req.method == "PUT") {
+        if (dispatch_request_for_content_reader(
+                req, res, std::move(reader),
+                put_handlers_for_content_reader_)) {
+          return true;
+        }
+      } else if (req.method == "PATCH") {
+        if (dispatch_request_for_content_reader(
+                req, res, std::move(reader),
+                patch_handlers_for_content_reader_)) {
+          return true;
+        }
+      } else if (req.method == "DELETE") {
+        if (dispatch_request_for_content_reader(
+                req, res, std::move(reader),
+                delete_handlers_for_content_reader_)) {
+          return true;
+        }
       }
-      return true;
     }
 
     // Read content into `req.body`
@@ -8470,11 +8414,6 @@ get_client_ip(const std::string &x_forwarded_for,
                   ip_list.emplace_back(std::string(b + r.first, b + r.second));
                 });
 
-  // A malformed X-Forwarded-For (empty, comma-only, whitespace-only) yields
-  // no segments. Signal "no client IP derived" with an empty string so the
-  // caller can fall back to the connection-level remote address.
-  if (ip_list.empty()) { return std::string(); }
-
   for (size_t i = 0; i < ip_list.size(); ++i) {
     auto ip = ip_list[i];
 
@@ -8562,8 +8501,7 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
 
   if (!trusted_proxies_.empty() && req.has_header("X-Forwarded-For")) {
     auto x_forwarded_for = req.get_header_value("X-Forwarded-For");
-    auto derived = get_client_ip(x_forwarded_for, trusted_proxies_);
-    req.remote_addr = derived.empty() ? remote_addr : derived;
+    req.remote_addr = get_client_ip(x_forwarded_for, trusted_proxies_);
   } else {
     req.remote_addr = remote_addr;
   }
@@ -9225,10 +9163,18 @@ inline bool ClientImpl::create_redirect_client(
     // Setup basic client configuration first
     setup_redirect_client(redirect_client);
 
-    redirect_client.enable_server_certificate_verification(
-        server_certificate_verification_);
-    redirect_client.enable_server_hostname_verification(
-        server_hostname_verification_);
+    // SSL-specific configuration for proxy environments
+    if (!proxy_host_.empty() && proxy_port_ != -1) {
+      // Critical: Disable SSL verification for proxy environments
+      redirect_client.enable_server_certificate_verification(false);
+      redirect_client.enable_server_hostname_verification(false);
+    } else {
+      // For direct SSL connections, copy SSL verification settings
+      redirect_client.enable_server_certificate_verification(
+          server_certificate_verification_);
+      redirect_client.enable_server_hostname_verification(
+          server_hostname_verification_);
+    }
 
     // Handle CA certificate store and paths if available
     if (ca_cert_store_ && X509_STORE_up_ref(ca_cert_store_)) {
@@ -9278,11 +9224,18 @@ inline void ClientImpl::setup_redirect_client(ClientType &client) {
   client.set_compress(compress_);
   client.set_decompress(decompress_);
 
-  // NOTE: Authentication credentials (basic auth, bearer token, digest auth)
-  // are intentionally NOT copied to the redirect client. Per RFC 9110 Section
-  // 15.4, credentials must not be forwarded when redirecting to a different
-  // host. This function is only called for cross-host redirects; same-host
-  // redirects are handled directly in ClientImpl::redirect().
+  // Copy authentication settings BEFORE proxy setup
+  if (!basic_auth_username_.empty()) {
+    client.set_basic_auth(basic_auth_username_, basic_auth_password_);
+  }
+  if (!bearer_token_auth_token_.empty()) {
+    client.set_bearer_token_auth(bearer_token_auth_token_);
+  }
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+  if (!digest_auth_username_.empty()) {
+    client.set_digest_auth(digest_auth_username_, digest_auth_password_);
+  }
+#endif
 
   // Setup proxy configuration (CRITICAL ORDER - proxy must be set
   // before proxy auth)
@@ -9473,11 +9426,7 @@ inline bool ClientImpl::write_request(Stream &strm, Request &req,
 
     // Write request line and headers
     detail::write_request_line(bstrm, req.method, path_with_query);
-    if (!detail::check_and_write_headers(bstrm, req.headers, header_writer_,
-                                         error)) {
-      output_error_log(error, &req);
-      return false;
-    }
+    header_writer_(bstrm, req.headers);
 
     // Flush buffer
     auto &data = bstrm.get_buffer();

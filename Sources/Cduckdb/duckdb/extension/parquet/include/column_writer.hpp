@@ -8,30 +8,10 @@
 
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-#include <string>
-#include <vector>
-
 #include "duckdb.hpp"
 #include "parquet_types.h"
 #include "parquet_column_schema.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
-#include "duckdb/common/assert.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/helper.hpp"
-#include "duckdb/common/optional_idx.hpp"
-#include "duckdb/common/optional_ptr.hpp"
-#include "duckdb/common/string.hpp"
-#include "duckdb/common/typedefs.hpp"
-#include "duckdb/common/types.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/vector.hpp"
-
-namespace duckdb_parquet {
-class RowGroup;
-class SchemaElement;
-} // namespace duckdb_parquet
 
 namespace duckdb {
 class MemoryStream;
@@ -42,12 +22,6 @@ struct ChildFieldIDs;
 struct ShreddingType;
 class ResizeableBuffer;
 class ParquetBloomFilter;
-class AllocatedData;
-class BoundReferenceExpression;
-class ClientContext;
-class Expression;
-class Vector;
-struct ValidityMask;
 
 class ColumnWriterState {
 public:
@@ -115,7 +89,7 @@ protected:
 	static constexpr uint16_t PARQUET_DEFINE_VALID = UINT16_C(65535);
 
 public:
-	ColumnWriter(ParquetWriter &writer, ParquetColumnSchema &&column_schema, vector<Identifier> schema_path);
+	ColumnWriter(ParquetWriter &writer, ParquetColumnSchema &&column_schema, vector<string> schema_path);
 	virtual ~ColumnWriter();
 
 public:
@@ -171,14 +145,12 @@ public:
 		throw NotImplementedException("Writer doesn't require an AnalyzeSchemaFinalize pass");
 	}
 
-	virtual bool TryExportPreparedShreddingType(ShreddingType &result) const;
-
 	virtual idx_t FinalizeSchema(vector<duckdb_parquet::SchemaElement> &schemas) = 0;
 
 	//! Create the column writer for a specific type recursively
 	static unique_ptr<ColumnWriter> CreateWriterRecursive(ClientContext &context, ParquetWriter &writer,
-	                                                      vector<Identifier> path_in_schema, const LogicalType &type,
-	                                                      const Identifier &name, bool allow_geometry,
+	                                                      vector<string> path_in_schema, const LogicalType &type,
+	                                                      const string &name, bool allow_geometry,
 	                                                      optional_ptr<const ChildFieldIDs> field_ids,
 	                                                      optional_ptr<const ShreddingType> shredding_types,
 	                                                      idx_t max_repeat = 0, idx_t max_define = 1,
@@ -205,7 +177,6 @@ public:
 
 	virtual void BeginWrite(ColumnWriterState &state) = 0;
 	virtual void Write(ColumnWriterState &state, Vector &vector, idx_t count) = 0;
-	virtual void PrepareWrite(ColumnWriterState &state) = 0;
 	virtual void FinalizeWrite(ColumnWriterState &state) = 0;
 
 public:
@@ -233,7 +204,7 @@ public:
 	//! The parent writer (if this is a nested field)
 	optional_ptr<ColumnWriter> parent;
 	ParquetColumnSchema column_schema;
-	vector<Identifier> schema_path;
+	vector<string> schema_path;
 	bool can_have_nulls;
 
 protected:

@@ -3,9 +3,8 @@
 namespace duckdb {
 
 IndexCatalogEntry::IndexCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateIndexInfo &info)
-    : StandardEntry(CatalogType::INDEX_ENTRY, schema, catalog, info.GetIndexName()), sql(info.sql),
-      options(info.options), index_type(info.index_type), index_constraint_type(info.constraint_type),
-      column_ids(info.column_ids) {
+    : StandardEntry(CatalogType::INDEX_ENTRY, schema, catalog, info.index_name), sql(info.sql), options(info.options),
+      index_type(info.index_type), index_constraint_type(info.constraint_type), column_ids(info.column_ids) {
 	this->temporary = info.temporary;
 	this->dependencies = info.dependencies;
 	this->comment = info.comment;
@@ -21,11 +20,12 @@ IndexCatalogEntry::IndexCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schem
 
 unique_ptr<CreateInfo> IndexCatalogEntry::GetInfo() const {
 	auto result = make_uniq<CreateIndexInfo>();
-	result->SetQualifiedName(QualifiedName({GetSchemaName()}, name));
+	result->schema = GetSchemaName();
 	result->table = GetTableName();
 
 	result->temporary = temporary;
 	result->sql = sql;
+	result->index_name = name;
 	result->index_type = index_type;
 	result->constraint_type = index_constraint_type;
 	result->column_ids = column_ids;
@@ -40,7 +40,6 @@ unique_ptr<CreateInfo> IndexCatalogEntry::GetInfo() const {
 
 	result->comment = comment;
 	result->tags = tags;
-	result->options = options;
 
 	return std::move(result);
 }

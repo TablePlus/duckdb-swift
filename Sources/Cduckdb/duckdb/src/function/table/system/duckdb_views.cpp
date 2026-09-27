@@ -94,47 +94,46 @@ void DuckDBViewsFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 
 		for (idx_t c = 0; c < data.column_ids.size(); c++) {
 			auto column_id = data.column_ids[c].GetPrimaryIndex();
-			auto &col_vector = output.data[c];
 			switch (column_id) {
 			case 0:
 				// database_name, VARCHAR
-				col_vector.Append(Value(view.catalog.GetName()));
+				output.SetValue(c, count, view.catalog.GetName());
 				break;
 			case 1:
 				// database_oid, BIGINT
-				col_vector.Append(Value::BIGINT(NumericCast<int64_t>(view.catalog.GetOid())));
+				output.SetValue(c, count, Value::BIGINT(NumericCast<int64_t>(view.catalog.GetOid())));
 				break;
 			case 2:
 				// schema_name, LogicalType::VARCHAR
-				col_vector.Append(Value(view.schema.name));
+				output.SetValue(c, count, Value(view.schema.name));
 				break;
 			case 3:
 				// schema_oid, LogicalType::BIGINT
-				col_vector.Append(Value::BIGINT(NumericCast<int64_t>(view.schema.oid)));
+				output.SetValue(c, count, Value::BIGINT(NumericCast<int64_t>(view.schema.oid)));
 				break;
 			case 4:
 				// view_name, LogicalType::VARCHAR
-				col_vector.Append(Value(view.name));
+				output.SetValue(c, count, Value(view.name));
 				break;
 			case 5:
 				// view_oid, LogicalType::BIGINT
-				col_vector.Append(Value::BIGINT(NumericCast<int64_t>(view.oid)));
+				output.SetValue(c, count, Value::BIGINT(NumericCast<int64_t>(view.oid)));
 				break;
 			case 6:
-				// comment, LogicalType::VARCHAR
-				col_vector.Append(Value(view.comment));
+				// comment, LogicalType::VARCHARs
+				output.SetValue(c, count, Value(view.comment));
 				break;
 			case 7:
 				// tags, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)
-				col_vector.Append(Value::MAP(view.tags));
+				output.SetValue(c, count, Value::MAP(view.tags));
 				break;
 			case 8:
 				// internal, LogicalType::BOOLEAN
-				col_vector.Append(Value::BOOLEAN(view.internal));
+				output.SetValue(c, count, Value::BOOLEAN(view.internal));
 				break;
 			case 9:
 				// temporary, LogicalType::BOOLEAN
-				col_vector.Append(Value::BOOLEAN(view.temporary));
+				output.SetValue(c, count, Value::BOOLEAN(view.temporary));
 				break;
 			case 10: {
 				// column_count, LogicalType::BIGINT
@@ -144,17 +143,17 @@ void DuckDBViewsFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 				if (columns) {
 					column_count = Value::BIGINT(NumericCast<int64_t>(columns->types.size()));
 				}
-				col_vector.Append(column_count);
+				output.SetValue(c, count, column_count);
 				break;
 			}
 			case 11:
 				// sql, LogicalType::VARCHAR
-				col_vector.Append(Value(view.ToSQL()));
+				output.SetValue(c, count, Value(view.ToSQL()));
 				break;
 			case 12: {
 				// is_bound, LogicalType::BOOLEAN
 				auto columns = view.GetColumnInfo();
-				col_vector.Append(Value::BOOLEAN(columns.get()));
+				output.SetValue(c, count, Value::BOOLEAN(columns.get()));
 				break;
 			}
 			default:
@@ -163,6 +162,7 @@ void DuckDBViewsFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 		}
 		count++;
 	}
+	output.SetCardinality(count);
 }
 
 void DuckDBViewsFun::RegisterFunction(BuiltinFunctions &set) {

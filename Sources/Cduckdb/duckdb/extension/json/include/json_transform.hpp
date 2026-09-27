@@ -10,7 +10,6 @@
 
 #include "duckdb/common/column_index.hpp"
 #include "duckdb/common/optional_ptr.hpp"
-#include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include "json_common.hpp"
 
@@ -23,7 +22,7 @@ class JSONReader;
 struct JSONTransformOptions {
 public:
 	JSONTransformOptions();
-	JSONTransformOptions(bool strict_cast, bool error_duplicate_key, bool error_missing_key, bool error_unknown_key);
+	JSONTransformOptions(bool strict_cast, bool error_duplicate_key, bool error_missing_key, bool error_unkown_key);
 
 public:
 	//! Throws an error if the cast doesn't work (instead of NULL-ing it)

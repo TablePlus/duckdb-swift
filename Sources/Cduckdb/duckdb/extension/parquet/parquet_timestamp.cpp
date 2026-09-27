@@ -1,11 +1,9 @@
 #include "parquet_timestamp.hpp"
 
+#include "duckdb.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/common/helper.hpp"
-#include "duckdb/common/typedefs.hpp"
-#include "duckdb/common/types/interval.hpp"
 
 namespace duckdb {
 
@@ -45,15 +43,14 @@ timestamp_t ImpalaTimestampToTimestamp(const Int96 &raw_ts) {
 }
 
 Int96 TimestampToImpalaTimestamp(timestamp_t &ts) {
-	int32_t hour, min, sec, micros;
-	Time::Convert(Timestamp::GetTime(ts), hour, min, sec, micros);
-	uint64_t micros_since_midnight =
-	    hour * Interval::MICROS_PER_HOUR + min * Interval::MICROS_PER_MINUTE + sec * Interval::MICROS_PER_SEC + micros;
+	int32_t hour, min, sec, msec;
+	Time::Convert(Timestamp::GetTime(ts), hour, min, sec, msec);
+	uint64_t ms_since_midnight = hour * 60 * 60 * 1000 + min * 60 * 1000 + sec * 1000 + msec;
 	auto days_since_epoch = Date::Epoch(Timestamp::GetDate(ts)) / int64_t(24 * 60 * 60);
 	// first two uint32 in Int96 are nanoseconds since midnights
 	// last uint32 is number of days since year 4713 BC ("Julian date")
 	Int96 impala_ts;
-	Store<uint64_t>(micros_since_midnight * NANOSECONDS_PER_MICRO, data_ptr_cast(impala_ts.value));
+	Store<uint64_t>(ms_since_midnight * 1000000, data_ptr_cast(impala_ts.value));
 	impala_ts.value[2] = days_since_epoch + JULIAN_TO_UNIX_EPOCH_DAYS;
 	return impala_ts;
 }
@@ -64,7 +61,7 @@ timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts) {
 
 timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts) {
 	timestamp_t input(raw_ts);
-	if (!input.IsFinite()) {
+	if (!Timestamp::IsFinite(input)) {
 		return input;
 	}
 	return Timestamp::FromEpochMs(raw_ts);
@@ -73,7 +70,7 @@ timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts) {
 timestamp_ns_t ParquetTimestampMsToTimestampNs(const int64_t &raw_ms) {
 	timestamp_ns_t input;
 	input.value = raw_ms;
-	if (!input.IsFinite()) {
+	if (!Timestamp::IsFinite(input)) {
 		return input;
 	}
 	return Timestamp::TimestampNsFromEpochMillis(raw_ms);
@@ -82,7 +79,7 @@ timestamp_ns_t ParquetTimestampMsToTimestampNs(const int64_t &raw_ms) {
 timestamp_ns_t ParquetTimestampUsToTimestampNs(const int64_t &raw_us) {
 	timestamp_ns_t input;
 	input.value = raw_us;
-	if (!input.IsFinite()) {
+	if (!Timestamp::IsFinite(input)) {
 		return input;
 	}
 	return Timestamp::TimestampNsFromEpochMicros(raw_us);
@@ -96,7 +93,7 @@ timestamp_ns_t ParquetTimestampNsToTimestampNs(const int64_t &raw_ns) {
 
 timestamp_t ParquetTimestampNsToTimestamp(const int64_t &raw_ts) {
 	timestamp_t input(raw_ts);
-	if (!input.IsFinite()) {
+	if (!Timestamp::IsFinite(input)) {
 		return input;
 	}
 	return Timestamp::FromEpochNanoSeconds(raw_ts);

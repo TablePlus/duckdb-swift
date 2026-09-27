@@ -16,45 +16,45 @@
 namespace duckdb {
 
 string MermaidTreeRenderer::ToString(const LogicalOperator &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
 string MermaidTreeRenderer::ToString(const PhysicalOperator &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
 string MermaidTreeRenderer::ToString(const ProfilingNode &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
 string MermaidTreeRenderer::ToString(const Pipeline &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
-void MermaidTreeRenderer::Render(const LogicalOperator &op, BaseTreeRenderer &ss) {
+void MermaidTreeRenderer::Render(const LogicalOperator &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void MermaidTreeRenderer::Render(const PhysicalOperator &op, BaseTreeRenderer &ss) {
+void MermaidTreeRenderer::Render(const PhysicalOperator &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void MermaidTreeRenderer::Render(const ProfilingNode &op, BaseTreeRenderer &ss) {
+void MermaidTreeRenderer::Render(const ProfilingNode &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void MermaidTreeRenderer::Render(const Pipeline &op, BaseTreeRenderer &ss) {
+void MermaidTreeRenderer::Render(const Pipeline &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
@@ -80,7 +80,7 @@ static string SanitizeMermaidLabel(const string &text) {
 	return result;
 }
 
-void MermaidTreeRenderer::ToStreamInternal(RenderTree &root, BaseTreeRenderer &ss) {
+void MermaidTreeRenderer::ToStreamInternal(RenderTree &root, std::ostream &ss) {
 	vector<string> nodes;
 	vector<string> edges;
 
@@ -128,14 +128,6 @@ void MermaidTreeRenderer::ToStreamInternal(RenderTree &root, BaseTreeRenderer &s
 	for (auto &edge : edges) {
 		ss << edge << "\n";
 	}
-}
-
-string MermaidTreeRenderer::RenderProfilerDisabled() {
-	return R"(flowchart TD
-    node_0_0["`**DISABLED**
-Query profiling is disabled.
-Use 'PRAGMA enable_profiling;' to enable profiling!`"]
-)";
 }
 
 } // namespace duckdb

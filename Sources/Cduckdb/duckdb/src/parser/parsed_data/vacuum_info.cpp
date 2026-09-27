@@ -27,7 +27,7 @@ string VacuumInfo::ToString() const {
 		if (!columns.empty()) {
 			vector<string> names;
 			for (auto &column : columns) {
-				names.push_back(SQLIdentifier::ToString(column.GetIdentifierName()));
+				names.push_back(KeywordHelper::WriteOptionallyQuoted(column));
 			}
 			result += "(" + StringUtil::Join(names, ", ") + ")";
 		}

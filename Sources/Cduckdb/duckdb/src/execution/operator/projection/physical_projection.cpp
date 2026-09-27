@@ -17,10 +17,6 @@ public:
 	void Finalize(const PhysicalOperator &op, ExecutionContext &context) override {
 		context.thread.profiler.Flush(op);
 	}
-
-	bool SupportsReuse() const override {
-		return true;
-	}
 };
 
 PhysicalProjection::PhysicalProjection(PhysicalPlan &physical_plan, vector<LogicalType> types,

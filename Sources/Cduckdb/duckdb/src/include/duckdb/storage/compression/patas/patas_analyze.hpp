@@ -25,7 +25,7 @@ unique_ptr<AnalyzeState> PatasInitAnalyze(ColumnData &col_data, PhysicalType typ
 }
 
 template <class T>
-bool PatasAnalyze(AnalyzeState &state, const Vector &input) {
+bool PatasAnalyze(AnalyzeState &state, Vector &input, idx_t count) {
 	throw InternalException("Patas has been deprecated, can no longer be used to compress data");
 	return false;
 }

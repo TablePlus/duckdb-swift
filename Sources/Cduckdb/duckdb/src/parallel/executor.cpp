@@ -1,7 +1,5 @@
 #include "duckdb/execution/executor.hpp"
 
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/common/time_point.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/execution/operator/helper/physical_result_collector.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
@@ -83,9 +81,6 @@ void Executor::SchedulePipeline(const shared_ptr<MetaPipeline> &meta_pipeline, S
 	auto base_pipeline = meta_pipeline->GetBasePipeline();
 	auto base_initialize_event = make_shared_ptr<PipelineInitializeEvent>(base_pipeline);
 	auto base_event = make_shared_ptr<PipelineEvent>(base_pipeline);
-	if (base_pipeline->IsExternalInput()) {
-		base_pipeline->SetExternalInputEvent(base_event);
-	}
 	auto base_prepare_finish_event = make_shared_ptr<PipelinePrepareFinishEvent>(base_pipeline);
 	auto base_finish_event = make_shared_ptr<PipelineFinishEvent>(base_pipeline);
 	auto base_complete_event =
@@ -113,9 +108,6 @@ void Executor::SchedulePipeline(const shared_ptr<MetaPipeline> &meta_pipeline, S
 
 		// create events/stack for this pipeline
 		auto pipeline_event = make_shared_ptr<PipelineEvent>(pipeline);
-		if (pipeline->IsExternalInput()) {
-			pipeline->SetExternalInputEvent(pipeline_event);
-		}
 
 		auto finish_group = meta_pipeline->GetFinishGroup(*pipeline);
 		if (finish_group) {
@@ -208,27 +200,6 @@ void Executor::ScheduleEventsInternal(ScheduleEventData &event_data) {
 			auto &dep_entry = event_map_entry->second;
 			entry.second.pipeline_event.AddDependency(dep_entry.pipeline_complete_event);
 		}
-		for (auto &dependency : pipeline.dataflow_dependencies) {
-			auto dep = dependency.lock();
-			D_ASSERT(dep);
-			auto event_map_entry = event_map.find(*dep);
-			if (event_map_entry == event_map.end()) {
-				continue;
-			}
-			auto &dep_entry = event_map_entry->second;
-			entry.second.pipeline_event.AddDependency(dep_entry.pipeline_initialize_event);
-		}
-		for (auto &dependency : pipeline.external_finish_dependencies) {
-			auto dep = dependency.lock();
-			D_ASSERT(dep);
-			auto event_map_entry = event_map.find(*dep);
-			if (event_map_entry == event_map.end()) {
-				continue;
-			}
-			auto &dep_entry = event_map_entry->second;
-			entry.second.pipeline_event.AddDependency(dep_entry.pipeline_event);
-			entry.second.pipeline_prepare_finish_event.AddDependency(dep_entry.pipeline_event);
-		}
 	}
 
 	// set the dependencies for pipeline event
@@ -292,9 +263,6 @@ void Executor::ScheduleEventsInternal(ScheduleEventData &event_data) {
 	for (auto &event : events) {
 		if (!event->HasDependencies()) {
 			event->Schedule();
-			if (!event->HasTasks() && !event->IsFinished() && event->AutoFinishWithoutTasks()) {
-				event->Finish();
-			}
 		}
 	}
 }
@@ -461,15 +429,12 @@ void Executor::InitializeInternal(PhysicalOperator &plan) {
 
 void Executor::CancelTasks() {
 	task.reset();
-	reference_map_t<Task, shared_ptr<Task>> to_destroy;
 	{
 		lock_guard<mutex> elock(executor_lock);
 		// mark the query as cancelled so tasks will early-out
 		cancelled = true;
-		to_destroy = std::move(to_be_rescheduled_tasks);
 		to_be_rescheduled_tasks.clear();
 	}
-	to_destroy.clear();
 	// Drain all tasks first — they hold references to pipelines/events/states,
 	// so those must stay alive until all tasks have completed
 	while (executor_tasks > 0) {
@@ -487,20 +452,17 @@ void Executor::CancelTasks() {
 	events.clear();
 }
 
-bool Executor::WorkOnTasks() {
+void Executor::WorkOnTasks() {
 	auto &scheduler = TaskScheduler::GetScheduler(context);
 
-	bool did_work = false;
 	shared_ptr<Task> task_from_producer;
 	while (scheduler.GetTaskFromProducer(*producer, task_from_producer)) {
-		did_work = true;
 		auto res = task_from_producer->Execute(TaskExecutionMode::PROCESS_ALL);
 		if (res == TaskExecutionResult::TASK_BLOCKED) {
 			task_from_producer->Deschedule();
 		}
 		task_from_producer.reset();
 	}
-	return did_work;
 }
 
 void Executor::SignalTaskRescheduled(lock_guard<mutex> &) {
@@ -510,21 +472,22 @@ void Executor::SignalTaskRescheduled(lock_guard<mutex> &) {
 void Executor::WaitForTask() {
 #ifndef DUCKDB_NO_THREADS
 	static constexpr std::chrono::microseconds WAIT_TIME_MS = std::chrono::microseconds(WAIT_TIME * 1000);
-	auto begin = TimePoint::Tick();
+	auto begin = std::chrono::high_resolution_clock::now();
 	std::unique_lock<mutex> l(executor_lock);
-	auto end = TimePoint::Tick();
-	auto blocked_micros = NumericCast<idx_t>(TimePoint::ElapsedMicros(begin, end));
+	auto end = std::chrono::high_resolution_clock::now();
+	auto dur = end - begin;
+	auto ms = NumericCast<idx_t>(std::chrono::duration_cast<std::chrono::microseconds>(dur).count());
 	if (to_be_rescheduled_tasks.empty()) {
-		blocked_thread_time += blocked_micros;
+		blocked_thread_time += ms;
 		return;
 	}
 	if (ResultCollectorIsBlocked()) {
 		// If the result collector is blocked, it won't get unblocked until the connection calls Fetch
-		blocked_thread_time += blocked_micros;
+		blocked_thread_time += ms;
 		return;
 	}
 
-	blocked_thread_time += blocked_micros + WAIT_TIME_MS.count();
+	blocked_thread_time += ms + WAIT_TIME_MS.count();
 	task_reschedule.wait_for(l, WAIT_TIME_MS);
 #endif
 }
@@ -536,10 +499,10 @@ void Executor::RescheduleTask(shared_ptr<Task> &task_p) {
 		if (cancelled) {
 			return;
 		}
-		auto entry = to_be_rescheduled_tasks.find(*task_p);
+		auto entry = to_be_rescheduled_tasks.find(task_p.get());
 		if (entry != to_be_rescheduled_tasks.end()) {
 			auto &scheduler = TaskScheduler::GetScheduler(context);
-			to_be_rescheduled_tasks.erase(*task_p);
+			to_be_rescheduled_tasks.erase(task_p.get());
 			scheduler.ScheduleTask(GetToken(), task_p);
 			SignalTaskRescheduled(l);
 			break;
@@ -576,12 +539,12 @@ void Executor::AddToBeRescheduled(shared_ptr<Task> &task_p) {
 	if (cancelled) {
 		return;
 	}
-	if (to_be_rescheduled_tasks.find(*task_p) != to_be_rescheduled_tasks.end()) {
+	if (to_be_rescheduled_tasks.find(task_p.get()) != to_be_rescheduled_tasks.end()) {
 		return;
 	}
-	// Save the reference before move — evaluation order of operator[] key and assignment value is unspecified pre-C++17
-	auto &task_ref = *task_p;
-	to_be_rescheduled_tasks[task_ref] = std::move(task_p);
+	// Save raw pointer before move — evaluation order of operator[] key and assignment value is unspecified pre-C++17
+	auto raw_ptr = task_p.get();
+	to_be_rescheduled_tasks[raw_ptr] = std::move(task_p);
 }
 
 bool Executor::ExecutionIsFinished() {
@@ -715,11 +678,7 @@ void Executor::PushError(ErrorData exception) {
 	// push the exception onto the stack
 	error_manager.PushError(std::move(exception));
 	// interrupt execution of any other pipelines that belong to this executor
-	context.interrupt_state = ClientInterruptState::INTERRUPTED;
-	for (auto &pipeline : pipelines) {
-		pipeline->FinishSourceAndPreventBlocking(context);
-		pipeline->PreventSinkBlocking();
-	}
+	context.interrupted = true;
 }
 
 bool Executor::HasError() {

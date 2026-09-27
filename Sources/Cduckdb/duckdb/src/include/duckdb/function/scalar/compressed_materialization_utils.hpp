@@ -19,7 +19,8 @@ struct CMUtils {
 	//! The types we compress strings to
 	static const vector<LogicalType> StringTypes();
 
-	static unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input);
+	static unique_ptr<FunctionData> Bind(ClientContext &context, ScalarFunction &bound_function,
+	                                     vector<unique_ptr<Expression>> &arguments);
 };
 
 //! Needed for (de)serialization without binding
@@ -39,14 +40,6 @@ struct CMStringCompressFun {
 
 struct CMStringDecompressFun {
 	static ScalarFunction GetFunction(const LogicalType &input_type);
-};
-
-struct CMGeometryPointCompressFun {
-	static ScalarFunction GetFunction();
-};
-
-struct CMGeometryPointDecompressFun {
-	static ScalarFunction GetFunction();
 };
 
 } // namespace duckdb

@@ -1,6 +1,5 @@
 #include "duckdb/common/allocator.hpp"
 #include "duckdb/common/numeric_utils.hpp"
-#include "duckdb/common/string_util.hpp"
 
 #include <thread>
 #include <cstdint>
@@ -19,7 +18,7 @@ extern "C" {
 
 unsigned duckdb_malloc_ncpus() {
 #ifdef DUCKDB_NO_THREADS
-	return 1;
+	return 1
 #else
 	unsigned concurrency = duckdb::NumericCast<unsigned>(std::thread::hardware_concurrency());
 	return std::max(concurrency, 1u);
@@ -94,7 +93,11 @@ void Allocator::ThreadFlush(bool allocator_background_threads, idx_t threshold, 
 		// Flush thread-local cache
 		SetJemallocCTL("thread.tcache.flush");
 
-		// Reset the peak after flushing
+		// Flush this thread's arena
+		const auto purge_arena = PurgeArenaString(idx_t(GetJemallocCTL<unsigned>("thread.arena")));
+		SetJemallocCTL(purge_arena.c_str());
+
+		// Reset the peak after resetting
 		SetJemallocCTL("thread.peak.reset");
 	}
 }

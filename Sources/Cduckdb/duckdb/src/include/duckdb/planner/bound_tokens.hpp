@@ -23,9 +23,11 @@ class BoundSetOperationNode;
 class Expression;
 
 class BoundAggregateExpression;
+class BoundBetweenExpression;
 class BoundCaseExpression;
 class BoundCastExpression;
 class BoundColumnRefExpression;
+class BoundComparisonExpression;
 class BoundConjunctionExpression;
 class BoundConstantExpression;
 class BoundDefaultExpression;

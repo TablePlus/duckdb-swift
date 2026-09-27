@@ -20,7 +20,7 @@ public:
 	}
 	optional_idx(idx_t index) : index(index) { // NOLINT: allow implicit conversion from idx_t
 		if (index == INVALID_INDEX) {
-			ThrowInvalidInitialization();
+			throw InternalException("optional_idx cannot be initialized with an invalid index");
 		}
 	}
 
@@ -38,7 +38,7 @@ public:
 
 	idx_t GetIndex() const {
 		if (index == INVALID_INDEX) {
-			ThrowNotSet();
+			throw InternalException("Attempting to get the index of an optional_idx that is not set");
 		}
 		return index;
 	}
@@ -50,11 +50,6 @@ public:
 	inline bool operator!=(const optional_idx &rhs) const {
 		return index != rhs.index;
 	}
-
-private:
-	//! Kept out-of-line so that the throwing paths do not block inlining of the accessors
-	[[noreturn]] DUCKDB_API static void ThrowInvalidInitialization();
-	[[noreturn]] DUCKDB_API static void ThrowNotSet();
 
 private:
 	idx_t index;

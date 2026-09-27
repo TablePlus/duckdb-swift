@@ -16,8 +16,8 @@
 #include "number_currencysymbols.h"
 
 U_NAMESPACE_BEGIN
-
-namespace numparse::impl {
+namespace numparse {
+namespace impl {
 
 // Forward-declaration of implementation classes for friending
 class AffixPatternMatcherBuilder;
@@ -44,6 +44,22 @@ class CodePointMatcher : public NumberParseMatcher, public UMemory {
     UChar32 fCp;
 };
 
+} // namespace impl
+} // namespace numparse
+
+// Export a explicit template instantiations of MaybeStackArray, MemoryPool and CompactUnicodeString.
+// When building DLLs for Windows this is required even though no direct access leaks out of the i18n library.
+// (See digitlst.h, pluralaffix.h, datefmt.h, and others for similar examples.)
+// Note: These need to be outside of the numparse::impl namespace, or Clang will generate a compile error.
+#if U_PF_WINDOWS <= U_PLATFORM && U_PLATFORM <= U_PF_CYGWIN
+template class U_I18N_API MaybeStackArray<numparse::impl::CodePointMatcher*, 8>; 
+template class U_I18N_API MaybeStackArray<UChar, 4>;
+template class U_I18N_API MemoryPool<numparse::impl::CodePointMatcher, 8>;
+template class U_I18N_API numparse::impl::CompactUnicodeString<4>;
+#endif
+
+namespace numparse {
+namespace impl {
 
 struct AffixTokenMatcherSetupData {
     const CurrencySymbols& currencySymbols;
@@ -64,30 +80,26 @@ struct AffixTokenMatcherSetupData {
  *
  * @author sffc
  */
-// Exported as U_I18N_API_CLASS for tests
-class U_I18N_API_CLASS AffixTokenMatcherWarehouse : public UMemory {
+// Exported as U_I18N_API for tests
+class U_I18N_API AffixTokenMatcherWarehouse : public UMemory {
   public:
     AffixTokenMatcherWarehouse() = default;  // WARNING: Leaves the object in an unusable state
 
-    U_I18N_API AffixTokenMatcherWarehouse(const AffixTokenMatcherSetupData* setupData);
+    AffixTokenMatcherWarehouse(const AffixTokenMatcherSetupData* setupData);
 
     NumberParseMatcher& minusSign();
 
     NumberParseMatcher& plusSign();
 
-    NumberParseMatcher& approximatelySign();
-
     NumberParseMatcher& percent();
 
     NumberParseMatcher& permille();
 
-    U_I18N_API NumberParseMatcher& currency(UErrorCode& status);
+    NumberParseMatcher& currency(UErrorCode& status);
 
     IgnorablesMatcher& ignorables();
 
     NumberParseMatcher* nextCodePointMatcher(UChar32 cp, UErrorCode& status);
-
-    bool hasEmptyCurrencySymbol() const;
 
   private:
     // NOTE: The following field may be unsafe to access after construction is done!
@@ -96,7 +108,6 @@ class U_I18N_API_CLASS AffixTokenMatcherWarehouse : public UMemory {
     // NOTE: These are default-constructed and should not be used until initialized.
     MinusSignMatcher fMinusSign;
     PlusSignMatcher fPlusSign;
-    ApproximatelySignMatcher fApproximatelySign;
     PercentMatcher fPercent;
     PermilleMatcher fPermille;
     CombinedCurrencyMatcher fCurrency;
@@ -117,7 +128,7 @@ class AffixPatternMatcherBuilder : public TokenConsumer, public MutableMatcherCo
     void consumeToken(::icu::number::impl::AffixPatternType type, UChar32 cp, UErrorCode& status) override;
 
     /** NOTE: You can build only once! */
-    AffixPatternMatcher build(UErrorCode& status);
+    AffixPatternMatcher build();
 
   private:
     ArraySeriesMatcher::MatcherArray fMatchers;
@@ -132,15 +143,15 @@ class AffixPatternMatcherBuilder : public TokenConsumer, public MutableMatcherCo
 };
 
 
-// Exported as U_I18N_API_CLASS for tests
-class U_I18N_API_CLASS AffixPatternMatcher : public ArraySeriesMatcher {
+// Exported as U_I18N_API for tests
+class U_I18N_API AffixPatternMatcher : public ArraySeriesMatcher {
   public:
     AffixPatternMatcher() = default;  // WARNING: Leaves the object in an unusable state
 
-    U_I18N_API static AffixPatternMatcher fromAffixPattern(const UnicodeString& affixPattern,
-                                                           AffixTokenMatcherWarehouse& warehouse,
-                                                           parse_flags_t parseFlags, bool* success,
-                                                           UErrorCode& status);
+    static AffixPatternMatcher fromAffixPattern(const UnicodeString& affixPattern,
+                                                AffixTokenMatcherWarehouse& warehouse,
+                                                parse_flags_t parseFlags, bool* success,
+                                                UErrorCode& status);
 
     UnicodeString getPattern() const;
 
@@ -149,8 +160,7 @@ class U_I18N_API_CLASS AffixPatternMatcher : public ArraySeriesMatcher {
   private:
     CompactUnicodeString<4> fPattern;
 
-    AffixPatternMatcher(MatcherArray& matchers, int32_t matchersLen, const UnicodeString& pattern,
-                        UErrorCode& status);
+    AffixPatternMatcher(MatcherArray& matchers, int32_t matchersLen, const UnicodeString& pattern);
 
     friend class AffixPatternMatcherBuilder;
 };
@@ -193,12 +203,10 @@ class AffixMatcherWarehouse {
                              UErrorCode& status);
 
   private:
-    // 18 is the limit: positive, zero, and negative, each with prefix, suffix, and prefix+suffix,
-    // and doubled since there may be an empty currency symbol
-    AffixMatcher fAffixMatchers[18];
-    // 6 is the limit: positive, zero, and negative, a prefix and a suffix for each,
-    // and doubled since there may be an empty currency symbol
-    AffixPatternMatcher fAffixPatternMatchers[12];
+    // 9 is the limit: positive, zero, and negative, each with prefix, suffix, and prefix+suffix
+    AffixMatcher fAffixMatchers[9];
+    // 6 is the limit: positive, zero, and negative, a prefix and a suffix for each
+    AffixPatternMatcher fAffixPatternMatchers[6];
     // Reference to the warehouse for tokens used by the AffixPatternMatchers
     AffixTokenMatcherWarehouse* fTokenWarehouse;
 
@@ -208,8 +216,9 @@ class AffixMatcherWarehouse {
                               parse_flags_t parseFlags, UErrorCode& status);
 };
 
-} // namespace numparse::impl
 
+} // namespace impl
+} // namespace numparse
 U_NAMESPACE_END
 
 #endif //__NUMPARSE_AFFIXES_H__

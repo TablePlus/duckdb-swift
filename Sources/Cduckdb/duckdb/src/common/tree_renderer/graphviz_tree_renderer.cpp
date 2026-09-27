@@ -16,50 +16,50 @@
 namespace duckdb {
 
 string GRAPHVIZTreeRenderer::ToString(const LogicalOperator &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
 string GRAPHVIZTreeRenderer::ToString(const PhysicalOperator &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
 string GRAPHVIZTreeRenderer::ToString(const ProfilingNode &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
 string GRAPHVIZTreeRenderer::ToString(const Pipeline &op) {
-	StringTreeRenderer ss;
+	duckdb::stringstream ss;
 	Render(op, ss);
 	return ss.str();
 }
 
-void GRAPHVIZTreeRenderer::Render(const LogicalOperator &op, BaseTreeRenderer &ss) {
+void GRAPHVIZTreeRenderer::Render(const LogicalOperator &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void GRAPHVIZTreeRenderer::Render(const PhysicalOperator &op, BaseTreeRenderer &ss) {
+void GRAPHVIZTreeRenderer::Render(const PhysicalOperator &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void GRAPHVIZTreeRenderer::Render(const ProfilingNode &op, BaseTreeRenderer &ss) {
+void GRAPHVIZTreeRenderer::Render(const ProfilingNode &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void GRAPHVIZTreeRenderer::Render(const Pipeline &op, BaseTreeRenderer &ss) {
+void GRAPHVIZTreeRenderer::Render(const Pipeline &op, std::ostream &ss) {
 	auto tree = RenderTree::CreateRenderTree(op);
 	ToStream(*tree, ss);
 }
 
-void GRAPHVIZTreeRenderer::ToStreamInternal(RenderTree &root, BaseTreeRenderer &ss) {
+void GRAPHVIZTreeRenderer::ToStreamInternal(RenderTree &root, std::ostream &ss) {
 	const string digraph_format = R"(
 digraph G {
     node [shape=box, style=rounded, fontname="Courier New", fontsize=10];
@@ -103,15 +103,6 @@ digraph G {
 
 	string result = StringUtil::Format(digraph_format, node_lines, edge_lines);
 	ss << result;
-}
-
-string GRAPHVIZTreeRenderer::RenderProfilerDisabled() {
-	return R"(
-				digraph G {
-				    node [shape=box, style=rounded, fontname="Courier New", fontsize=10];
-				    node_0_0 [label="Query profiling is disabled. Use 'PRAGMA enable_profiling;' to enable profiling!"];
-				}
-			)";
 }
 
 } // namespace duckdb

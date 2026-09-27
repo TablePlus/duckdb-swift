@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "unicode/calendar.h"
+#include "duckdb.hpp"
 #include "unicode/timezone.h"
 #include "duckdb/common/types/timestamp.hpp"
 
@@ -21,7 +21,6 @@ struct ICUHelpers {
 	static unique_ptr<icu::TimeZone> GetTimeZone(string &tz_str, string *error_message = nullptr);
 
 	static TimestampComponents GetComponents(timestamp_tz_t ts, icu::Calendar *calendar);
-	static TimestampComponents GetComponents(timestamp_tz_ns_t ts, icu::Calendar *calendar);
 
 	static timestamp_t ToTimestamp(TimestampComponents data);
 };

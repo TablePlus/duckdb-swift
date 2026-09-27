@@ -6,9 +6,8 @@
 namespace duckdb {
 
 static bool GeometryToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	auto &heap = StringVector::GetStringHeap(result);
 	UnaryExecutor::Execute<string_t, string_t>(
-	    source, result, count, [&](const string_t &input) -> string_t { return Geometry::ToString(heap, input); });
+	    source, result, count, [&](const string_t &input) -> string_t { return Geometry::ToString(result, input); });
 	return true;
 }
 

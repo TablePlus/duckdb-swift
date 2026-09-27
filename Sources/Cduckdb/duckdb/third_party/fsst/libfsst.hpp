@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include <stddef.h>
 
+using namespace std;
 
 #include "fsst.h" // the official FSST API -- also usable by C mortals
 
@@ -447,7 +448,7 @@ struct Counters {
 
 // an encoder is a symbolmap plus some bufferspace, needed during map construction as well as compression 
 struct Encoder {
-   std::shared_ptr<SymbolTable> symbolTable; // symbols, plus metadata and data structures for quick compression (shortCode,hashTab, etc)
+   shared_ptr<SymbolTable> symbolTable; // symbols, plus metadata and data structures for quick compression (shortCode,hashTab, etc)
    union {
       Counters counters;     // for counting symbol occurences during map construction
       u8 simdbuf[FSST_BUFSZ]; // for compression: SIMD string staging area 768KB = 256KB in + 512KB out (worst case for 256KB in) 

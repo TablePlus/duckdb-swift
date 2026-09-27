@@ -21,8 +21,6 @@ class LocalDatabaseFileSystem;
 
 class BufferManager;
 class DatabaseManager;
-class ExternalResourceTypeRegistry;
-class ExternalResourcesManager;
 class StorageManager;
 class Catalog;
 class TransactionManager;
@@ -36,10 +34,8 @@ struct AttachOptions;
 class DatabaseFileSystem;
 struct DatabaseCacheEntry;
 class LogManager;
-class MetricsManager;
 class ExternalFileCache;
 class ResultSetManager;
-struct ParserCache;
 
 class DatabaseInstance : public enable_shared_from_this<DatabaseInstance> {
 	friend class DuckDB;
@@ -56,8 +52,6 @@ public:
 	DUCKDB_API BufferManager &GetBufferManager();
 	DUCKDB_API const BufferManager &GetBufferManager() const;
 	DUCKDB_API DatabaseManager &GetDatabaseManager();
-	DUCKDB_API ExternalResourceTypeRegistry &GetExternalResourceTypeRegistry();
-	DUCKDB_API ExternalResourcesManager &GetExternalResourcesManager();
 	DUCKDB_API FileSystem &GetFileSystem();
 	DUCKDB_API FileSystem &GetLocalFileSystem();
 	DUCKDB_API ExternalFileCache &GetExternalFileCache();
@@ -68,8 +62,6 @@ public:
 	DUCKDB_API ExtensionManager &GetExtensionManager();
 	DUCKDB_API ValidChecker &GetValidChecker();
 	DUCKDB_API LogManager &GetLogManager() const;
-	DUCKDB_API MetricsManager &GetMetricsManager();
-	DUCKDB_API ParserCache &GetParserCache();
 
 	DUCKDB_API const duckdb_ext_api_v1 GetExtensionAPIV1();
 
@@ -98,8 +90,6 @@ private:
 private:
 	shared_ptr<BufferManager> buffer_manager;
 	unique_ptr<DatabaseManager> db_manager;
-	unique_ptr<ExternalResourceTypeRegistry> external_resource_type_registry;
-	unique_ptr<ExternalResourcesManager> external_resources_manager;
 	unique_ptr<TaskScheduler> scheduler;
 	unique_ptr<ObjectCache> object_cache;
 	unique_ptr<ConnectionManager> connection_manager;
@@ -108,10 +98,8 @@ private:
 	unique_ptr<DatabaseFileSystem> db_file_system;
 	unique_ptr<LocalDatabaseFileSystem> local_db_file_system;
 	unique_ptr<LogManager> log_manager;
-	unique_ptr<MetricsManager> metrics_manager;
 	unique_ptr<ExternalFileCache> external_file_cache;
 	unique_ptr<ResultSetManager> result_set_manager;
-	unique_ptr<ParserCache> parser_cache;
 
 	duckdb_ext_api_v1 (*create_api_v1)();
 };
@@ -135,7 +123,7 @@ public:
 	void LoadStaticExtension() {
 		T extension;
 		auto &manager = ExtensionManager::Get(*instance);
-		auto load_info = manager.BeginLoad({extension.Name()});
+		auto load_info = manager.BeginLoad(extension.Name());
 		if (!load_info) {
 			// already loaded - return
 			return;
@@ -155,11 +143,6 @@ public:
 		install_info.version = extension.Version();
 		load_info->FinishLoad(install_info);
 	}
-
-	// Function pointer type for the C API extension init function
-	typedef bool (*ext_init_c_api_fun_t)(duckdb_extension_info info, duckdb_extension_access *access);
-	// Load a statically compiled C API extension by calling its init function directly (no vtable needed)
-	DUCKDB_API void LoadStaticCAPIExtension(const string &name, ext_init_c_api_fun_t init_fun);
 
 	DUCKDB_API FileSystem &GetFileSystem();
 

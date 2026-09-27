@@ -21,29 +21,23 @@ void JsonSerializer::PushValue(yyjson_mut_val *val) {
 
 void JsonSerializer::OnPropertyBegin(const field_id_t, const char *tag) {
 	current_tag = yyjson_mut_strcpy(doc, tag);
-	property_can_be_omitted.push_back(false);
 }
 
 void JsonSerializer::OnPropertyEnd() {
-	property_can_be_omitted.pop_back();
 }
 
-void JsonSerializer::OnOptionalPropertyBegin(const field_id_t, const char *tag, bool present) {
-	if (present) {
-		current_tag = yyjson_mut_strcpy(doc, tag);
-	}
-	property_can_be_omitted.push_back(present);
+void JsonSerializer::OnOptionalPropertyBegin(const field_id_t, const char *tag, bool) {
+	current_tag = yyjson_mut_strcpy(doc, tag);
 }
 
 void JsonSerializer::OnOptionalPropertyEnd(bool) {
-	property_can_be_omitted.pop_back();
 }
 
 //-------------------------------------------------------------------------
 // Nested Types
 //-------------------------------------------------------------------------
 void JsonSerializer::OnNullableBegin(bool present) {
-	if (!present && !(skip_if_null && yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted())) {
+	if (!present && !skip_if_null) {
 		WriteNull();
 	}
 }
@@ -53,39 +47,32 @@ void JsonSerializer::OnNullableEnd() {
 
 void JsonSerializer::OnListBegin(idx_t count) {
 	auto new_value = yyjson_mut_arr(doc);
-	auto can_be_omitted = yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted();
 	// We always push a value to the stack, we just don't add it as a child to the current value
 	// if skipping empty. Even though it is "unnecessary" to create an empty value just to discard it,
 	// this allows the rest of the code to keep on like normal.
-	if (!(count == 0 && skip_if_empty && can_be_omitted)) {
+	if (!(count == 0 && skip_if_empty)) {
 		PushValue(new_value);
 	}
 	stack.push_back(new_value);
-	stack_can_be_omitted.push_back(can_be_omitted);
 }
 
 void JsonSerializer::OnListEnd() {
 	stack.pop_back();
-	stack_can_be_omitted.pop_back();
 }
 
 void JsonSerializer::OnObjectBegin() {
 	auto new_value = yyjson_mut_obj(doc);
-	auto can_be_omitted = yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted();
 	PushValue(new_value);
 	stack.push_back(new_value);
-	stack_can_be_omitted.push_back(can_be_omitted);
 }
 
 void JsonSerializer::OnObjectEnd() {
 	auto obj = Current();
 	auto count = yyjson_mut_obj_size(obj);
-	auto can_be_omitted = stack_can_be_omitted.back();
 
 	stack.pop_back();
-	stack_can_be_omitted.pop_back();
 
-	if (count == 0 && skip_if_empty && can_be_omitted && !stack.empty()) {
+	if (count == 0 && skip_if_empty && !stack.empty()) {
 		// remove obj from parent since it was empty
 		auto parent = Current();
 		if (yyjson_mut_is_arr(parent)) {
@@ -119,7 +106,7 @@ void JsonSerializer::OnObjectEnd() {
 // Primitive Types
 //-------------------------------------------------------------------------
 void JsonSerializer::WriteNull() {
-	if (skip_if_null && yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted()) {
+	if (skip_if_null) {
 		return;
 	}
 	auto val = yyjson_mut_null(doc);
@@ -184,33 +171,18 @@ void JsonSerializer::WriteValue(uhugeint_t value) {
 	stack.pop_back();
 }
 
-yyjson_mut_val *DoubleToJSONValue(yyjson_mut_doc *doc, double value) {
-	if (Value::FloatIsFinite(value)) {
-		// simple - finite json
-		return yyjson_mut_real(doc, value);
-	}
-	// represent infinities as strings
-	const char *str;
-	if (!Value::IsNan(value)) {
-		str = value < 0 ? "-Infinity" : "Infinity";
-	} else {
-		str = "NAN";
-	}
-	return yyjson_mut_raw(doc, str);
-}
-
 void JsonSerializer::WriteValue(float value) {
-	auto val = DoubleToJSONValue(doc, value);
+	auto val = yyjson_mut_real(doc, value);
 	PushValue(val);
 }
 
 void JsonSerializer::WriteValue(double value) {
-	auto val = DoubleToJSONValue(doc, value);
+	auto val = yyjson_mut_real(doc, value);
 	PushValue(val);
 }
 
 void JsonSerializer::WriteValue(const string &value) {
-	if (skip_if_empty && value.empty() && yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted()) {
+	if (skip_if_empty && value.empty()) {
 		return;
 	}
 	auto val = yyjson_mut_strncpy(doc, value.c_str(), value.size());
@@ -218,7 +190,7 @@ void JsonSerializer::WriteValue(const string &value) {
 }
 
 void JsonSerializer::WriteValue(const string_t value) {
-	if (skip_if_empty && value.GetSize() == 0 && yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted()) {
+	if (skip_if_empty && value.GetSize() == 0) {
 		return;
 	}
 	auto val = yyjson_mut_strncpy(doc, value.GetData(), value.GetSize());
@@ -226,7 +198,7 @@ void JsonSerializer::WriteValue(const string_t value) {
 }
 
 void JsonSerializer::WriteValue(const char *value) {
-	if (skip_if_empty && strlen(value) == 0 && yyjson_mut_is_obj(Current()) && CurrentPropertyCanBeOmitted()) {
+	if (skip_if_empty && strlen(value) == 0) {
 		return;
 	}
 	auto val = yyjson_mut_strcpy(doc, value);

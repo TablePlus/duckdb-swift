@@ -1,4 +1,5 @@
 #include "core_functions/aggregate/algebraic_functions.hpp"
+#include "duckdb/common/types/null_value.hpp"
 #include "core_functions/aggregate/algebraic/covar.hpp"
 
 namespace duckdb {

@@ -19,10 +19,10 @@ public:
 	static constexpr const StatementType TYPE = StatementType::COPY_DATABASE_STATEMENT;
 
 public:
-	CopyDatabaseStatement(Identifier from_database, Identifier to_database, CopyDatabaseType copy_type);
+	CopyDatabaseStatement(string from_database, string to_database, CopyDatabaseType copy_type);
 
-	Identifier from_database;
-	Identifier to_database;
+	string from_database;
+	string to_database;
 	CopyDatabaseType copy_type;
 
 protected:

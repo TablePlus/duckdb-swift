@@ -7,9 +7,6 @@
 #line 0 "src/parser/column_list.cpp"
 #include "src/parser/column_list.cpp"
 
-#line 0 "src/parser/common_table_expression_info.cpp"
-#include "src/parser/common_table_expression_info.cpp"
-
 #line 0 "src/parser/constraint.cpp"
 #include "src/parser/constraint.cpp"
 
@@ -42,4 +39,7 @@
 
 #line 0 "src/parser/tableref.cpp"
 #include "src/parser/tableref.cpp"
+
+#line 0 "src/parser/transformer.cpp"
+#include "src/parser/transformer.cpp"
 

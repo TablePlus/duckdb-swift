@@ -1,9 +1,6 @@
 #line 0 "src/function/aggregate/distributive/count.cpp"
 #include "src/function/aggregate/distributive/count.cpp"
 
-#line 0 "src/function/aggregate/distributive/decimal_avg.cpp"
-#include "src/function/aggregate/distributive/decimal_avg.cpp"
-
 #line 0 "src/function/aggregate/distributive/first_last_any.cpp"
 #include "src/function/aggregate/distributive/first_last_any.cpp"
 

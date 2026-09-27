@@ -2,7 +2,6 @@
 #include "duckdb/storage/compression/roaring/appender.hpp"
 
 #include "duckdb/common/limits.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/function/compression_function.hpp"
 
 namespace duckdb {
@@ -40,8 +39,8 @@ static unsafe_unique_array<BitmaskTableEntry> CreateBitmaskTable() {
 //===--------------------------------------------------------------------===//
 // Analyze
 //===--------------------------------------------------------------------===//
-RoaringAnalyzeState::RoaringAnalyzeState(BlockManager &block_manager)
-    : AnalyzeState(block_manager), bitmask_table(CreateBitmaskTable()) {
+RoaringAnalyzeState::RoaringAnalyzeState(const CompressionInfo &info)
+    : AnalyzeState(info), bitmask_table(CreateBitmaskTable()) {
 }
 
 void RoaringAnalyzeState::HandleByte(RoaringAnalyzeState &state, uint8_t array_index) {
@@ -158,25 +157,23 @@ void RoaringAnalyzeState::FlushContainer() {
 }
 
 template <>
-void RoaringAnalyzeState::Analyze<PhysicalType::BIT>(const Vector &input) {
+void RoaringAnalyzeState::Analyze<PhysicalType::BIT>(Vector &input, idx_t count) {
 	auto &self = *this;
-	RoaringStateAppender<RoaringAnalyzeState>::AppendVector(self, input);
-	total_count += input.size();
+	RoaringStateAppender<RoaringAnalyzeState>::AppendVector(self, input, count);
+	total_count += count;
 }
 
 template <>
-void RoaringAnalyzeState::Analyze<PhysicalType::BOOL>(const Vector &input) {
+void RoaringAnalyzeState::Analyze<PhysicalType::BOOL>(Vector &input, idx_t count) {
 	auto &self = *this;
-	const auto count = input.size();
-	input.Flatten();
+	input.Flatten(count);
 	Vector bitpacked_vector(LogicalType::UBIGINT, count);
-	FlatVector::SetSize(bitpacked_vector, count);
-	auto &bitpacked_vector_validity = FlatVector::ValidityMutable(bitpacked_vector);
+	auto &bitpacked_vector_validity = FlatVector::Validity(bitpacked_vector);
 	bitpacked_vector_validity.EnsureWritable();
 	auto dst = data_ptr_cast(bitpacked_vector_validity.GetData());
 	const bool *src = FlatVector::GetData<bool>(input);
 	const auto &validity = FlatVector::Validity(input);
-	if (validity.CannotHaveNull()) {
+	if (validity.AllValid()) {
 		BitPackBooleans<false, true>(dst, src, count);
 	} else {
 		BitPackBooleans<false, false>(dst, src, count, &validity);
@@ -184,7 +181,7 @@ void RoaringAnalyzeState::Analyze<PhysicalType::BOOL>(const Vector &input) {
 
 	// Bitpack the booleans, so they can be fed through the current compression code, with the same format as a validity
 	// mask.
-	RoaringStateAppender<RoaringAnalyzeState>::AppendVector(self, bitpacked_vector);
+	RoaringStateAppender<RoaringAnalyzeState>::AppendVector(self, bitpacked_vector, count);
 	total_count += count;
 }
 

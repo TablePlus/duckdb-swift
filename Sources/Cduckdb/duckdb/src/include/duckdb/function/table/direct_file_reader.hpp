@@ -19,7 +19,7 @@ public:
 	~DirectFileReader() override;
 
 public:
-	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, const Identifier &name) override;
+	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, const string &name) override;
 
 	bool TryInitializeScan(ClientContext &context, GlobalTableFunctionState &gstate,
 	                       LocalTableFunctionState &lstate) override;

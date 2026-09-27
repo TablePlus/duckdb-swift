@@ -9,9 +9,6 @@ namespace duckdb {
 namespace {
 
 struct KurtosisState {
-	static constexpr const char *STATE_NAMES[] = {"n", "sum", "sum_sqr", "sum_cub", "sum_four"};
-	using STATE_TYPE = StructStateType<idx_t, double, double, double, double>;
-
 	idx_t n;
 	double sum;
 	double sum_sqr;
@@ -25,6 +22,12 @@ struct KurtosisFlagNoBiasCorrection {};
 
 template <class KURTOSIS_FLAG>
 struct KurtosisOperation {
+	template <class STATE>
+	static void Initialize(STATE &state) {
+		state.n = 0;
+		state.sum = state.sum_sqr = state.sum_cub = state.sum_four = 0.0;
+	}
+
 	template <class INPUT_TYPE, class STATE, class OP>
 	static void ConstantOperation(STATE &state, const INPUT_TYPE &input, AggregateUnaryInput &unary_input,
 	                              idx_t count) {

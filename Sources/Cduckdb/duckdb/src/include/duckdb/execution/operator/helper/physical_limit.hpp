@@ -57,9 +57,6 @@ public:
 	bool ParallelSink() const override {
 		return true;
 	}
-	PipelineSourceConsumption GetSourceConsumption() const override {
-		return PipelineSourceConsumption::MAY_STOP_EARLY;
-	}
 
 	OperatorPartitionInfo RequiredPartitionInfo() const override {
 		return OperatorPartitionInfo::BatchIndex();
@@ -73,8 +70,6 @@ public:
 	                          const BoundLimitNode &offset_val);
 	static bool HandleOffset(DataChunk &input, idx_t &current_offset, idx_t offset, idx_t limit);
 	static Value GetDelimiter(ExecutionContext &context, DataChunk &input, const Expression &expr);
-
-	InsertionOrderPreservingMap<string> ParamsToString() const override;
 };
 
 } // namespace duckdb

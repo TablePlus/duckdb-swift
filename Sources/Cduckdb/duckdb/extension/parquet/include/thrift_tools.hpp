@@ -8,12 +8,12 @@
 
 #pragma once
 
+#include <list>
 #include "thrift/protocol/TCompactProtocol.h"
 #include "thrift/transport/TBufferTransports.h"
 
 #include "duckdb.hpp"
-#include "duckdb/storage/external_file_cache/caching_file_system.hpp"
-#include "duckdb/storage/external_file_cache/file_buffer_handle_group.hpp"
+#include "duckdb/storage/caching_file_system.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/allocator.hpp"
 
@@ -27,53 +27,25 @@ struct ReadHead {
 	uint64_t size;
 
 	// Current info
-	FileBufferHandleGroup handle_group;
-	AllocatedData local_buffer;
-	const_data_ptr_t buffer_ptr = nullptr;
+	BufferHandle buffer_handle;
+	data_ptr_t buffer_ptr;
 	bool data_isset = false;
 
 	idx_t GetEnd() const {
 		return size + location;
 	}
-
-	// Materialize [buffer_ptr], should call before access.
-	// TODO(hjiang): Currently it's only used for `Prefetch` operation, should be able to save one copy.
-	void Materialize(Allocator &allocator) {
-		if (handle_group.GetHandles().size() == 1) {
-			buffer_ptr = handle_group.Ptr();
-		} else {
-			local_buffer = allocator.Allocate(size);
-			handle_group.CopyTo(local_buffer.get(), size);
-			buffer_ptr = local_buffer.get();
-		}
-	}
-
-	void Fetch(CachingFileHandle &file_handle) {
-		if (GetEnd() > file_handle.GetFileSize()) {
-			throw std::runtime_error("Prefetch registered requested for bytes outside file");
-		}
-		handle_group = file_handle.Read(size, location);
-		Materialize(file_handle.GetBufferAllocator());
-		data_isset = true;
-	}
 };
 
+// Comparator for ReadHeads that are either overlapping, adjacent, or within ALLOW_GAP bytes from each other
 struct ReadHeadComparator {
-	static constexpr uint64_t DEFAULT_ACCEPTED_COLUMN_GAP = 1 << 14; // 16 KiB
-
-	ReadHeadComparator() = default;
-	explicit ReadHeadComparator(uint64_t accepted_column_gap_p) : accepted_column_gap(accepted_column_gap_p) {
-	}
-
-	uint64_t accepted_column_gap = DEFAULT_ACCEPTED_COLUMN_GAP;
-
+	static constexpr uint64_t ALLOW_GAP = 1 << 14; // 16 KiB
 	bool operator()(const ReadHead *a, const ReadHead *b) const {
 		auto a_start = a->location;
 		auto a_end = a->location + a->size;
 		auto b_start = b->location;
 
-		if (a_end <= NumericLimits<idx_t>::Maximum() - accepted_column_gap) {
-			a_end += accepted_column_gap;
+		if (a_end <= NumericLimits<idx_t>::Maximum() - ALLOW_GAP) {
+			a_end += ALLOW_GAP;
 		}
 
 		return a_start < b_start && a_end < b_start;
@@ -84,24 +56,17 @@ struct ReadHeadComparator {
 // 1: register all ranges that will be read, merging ranges that are consecutive
 // 2: prefetch all registered ranges
 struct ReadAheadBuffer {
-	explicit ReadAheadBuffer(CachingFileHandle &file_handle_p,
-	                         uint64_t accepted_column_gap = ReadHeadComparator::DEFAULT_ACCEPTED_COLUMN_GAP)
-	    : merge_set(ReadHeadComparator(accepted_column_gap)), file_handle(file_handle_p) {
+	explicit ReadAheadBuffer(CachingFileHandle &file_handle_p) : file_handle(file_handle_p) {
 	}
 
-	// The list of read heads.
-	vector<shared_ptr<ReadHead>> read_heads;
+	// The list of read heads
+	std::list<ReadHead> read_heads;
 	// Set for merging consecutive ranges
 	std::set<ReadHead *, ReadHeadComparator> merge_set;
 
 	CachingFileHandle &file_handle;
 
 	idx_t total_size = 0;
-
-	void SetAcceptedColumnGap(uint64_t accepted_column_gap) {
-		D_ASSERT(merge_set.empty());
-		merge_set = std::set<ReadHead *, ReadHeadComparator>(ReadHeadComparator(accepted_column_gap));
-	}
 
 	// Add a read head to the prefetching list
 	void AddReadHead(idx_t pos, uint64_t len, bool merge_buffers = true) {
@@ -119,9 +84,9 @@ struct ReadAheadBuffer {
 			}
 		}
 
-		read_heads.insert(read_heads.begin(), make_shared_ptr<ReadHead>(pos, len));
+		read_heads.emplace_front(ReadHead(pos, len));
 		total_size += len;
-		auto &read_head = *read_heads.front();
+		auto &read_head = read_heads.front();
 
 		if (merge_buffers) {
 			merge_set.insert(&read_head);
@@ -138,8 +103,8 @@ struct ReadAheadBuffer {
 	// Returns the relevant read head
 	ReadHead *GetReadHead(idx_t pos) {
 		for (auto &read_head : read_heads) {
-			if (pos >= read_head->location && pos < read_head->GetEnd()) {
-				return read_head.get();
+			if (pos >= read_head.location && pos < read_head.GetEnd()) {
+				return &read_head;
 			}
 		}
 		return nullptr;
@@ -148,7 +113,12 @@ struct ReadAheadBuffer {
 	// Prefetch all read heads
 	void Prefetch() {
 		for (auto &read_head : read_heads) {
-			read_head->Fetch(file_handle);
+			if (read_head.GetEnd() > file_handle.GetFileSize()) {
+				throw std::runtime_error("Prefetch registered requested for bytes outside file");
+			}
+			read_head.buffer_handle = file_handle.Read(read_head.buffer_ptr, read_head.size, read_head.location);
+			D_ASSERT(read_head.buffer_handle.IsValid());
+			read_head.data_isset = true;
 		}
 	}
 };
@@ -157,19 +127,9 @@ class ThriftFileTransport : public duckdb_apache::thrift::transport::TVirtualTra
 public:
 	static constexpr uint64_t PREFETCH_FALLBACK_BUFFERSIZE = 1000000;
 
-	ThriftFileTransport(QueryContext context_p, CachingFileHandle &file_handle_p, bool prefetch_mode_p,
-	                    uint64_t accepted_column_gap = ReadHeadComparator::DEFAULT_ACCEPTED_COLUMN_GAP)
-	    : context(context_p), file_handle(file_handle_p), location(0), size(file_handle.GetFileSize()),
-	      ra_buffer(ReadAheadBuffer(file_handle, accepted_column_gap)), prefetch_mode(prefetch_mode_p) {
-	}
-
-	void SetAcceptedColumnGap(uint64_t accepted_column_gap) {
-		ra_buffer.SetAcceptedColumnGap(accepted_column_gap);
-	}
-
-	// The accepted column gap currently used to coalesce adjacent ranges.
-	uint64_t GetAcceptedColumnGap() const {
-		return ra_buffer.merge_set.key_comp().accepted_column_gap;
+	ThriftFileTransport(CachingFileHandle &file_handle_p, bool prefetch_mode_p)
+	    : file_handle(file_handle_p), location(0), size(file_handle.GetFileSize()),
+	      ra_buffer(ReadAheadBuffer(file_handle)), prefetch_mode(prefetch_mode_p) {
 	}
 
 	uint32_t read(uint8_t *buf, uint32_t len) {
@@ -178,28 +138,21 @@ public:
 			D_ASSERT(location - prefetch_buffer->location + len <= prefetch_buffer->size);
 
 			if (!prefetch_buffer->data_isset) {
-				prefetch_buffer->Fetch(file_handle);
+				prefetch_buffer->buffer_handle =
+				    file_handle.Read(prefetch_buffer->buffer_ptr, prefetch_buffer->size, prefetch_buffer->location);
+				D_ASSERT(prefetch_buffer->buffer_handle.IsValid());
+				prefetch_buffer->data_isset = true;
 			}
+			D_ASSERT(prefetch_buffer->buffer_handle.IsValid());
 			memcpy(buf, prefetch_buffer->buffer_ptr + location - prefetch_buffer->location, len);
 		} else if (prefetch_mode && len < PREFETCH_FALLBACK_BUFFERSIZE && len > 0) {
-			auto file_size = file_handle.GetFileSize();
-			if (location >= file_size) {
-				file_handle.GetFileHandle()->Read(context, buf, len, location);
-				location += len;
-				return len;
-			}
-			Prefetch(location, MinValue<uint64_t>(PREFETCH_FALLBACK_BUFFERSIZE, file_size - location));
+			Prefetch(location, MinValue<uint64_t>(PREFETCH_FALLBACK_BUFFERSIZE, file_handle.GetFileSize() - location));
 			auto prefetch_buffer_fallback = ra_buffer.GetReadHead(location);
-			if (!prefetch_buffer_fallback ||
-			    location - prefetch_buffer_fallback->location + len > prefetch_buffer_fallback->size) {
-				file_handle.GetFileHandle()->Read(context, buf, len, location);
-				location += len;
-				return len;
-			}
+			D_ASSERT(location - prefetch_buffer_fallback->location + len <= prefetch_buffer_fallback->size);
 			memcpy(buf, prefetch_buffer_fallback->buffer_ptr + location - prefetch_buffer_fallback->location, len);
 		} else {
 			// No prefetch, do a regular (non-caching) read
-			file_handle.GetFileHandle()->Read(context, buf, len, location);
+			file_handle.GetFileHandle().Read(context, buf, len, location);
 		}
 
 		location += len;
@@ -251,14 +204,6 @@ public:
 
 	optional_ptr<ReadHead> GetReadHead(idx_t pos) {
 		return ra_buffer.GetReadHead(pos);
-	}
-
-	vector<shared_ptr<ReadHead>> &GetReadHeads() {
-		return ra_buffer.read_heads;
-	}
-
-	CachingFileHandle &GetCachingFileHandle() const {
-		return file_handle;
 	}
 
 	idx_t GetSize() const {

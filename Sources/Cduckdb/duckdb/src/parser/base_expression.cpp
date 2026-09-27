@@ -9,13 +9,13 @@ void BaseExpression::Print() const {
 	Printer::Print(ToString());
 }
 
-Identifier BaseExpression::GetName() const {
+string BaseExpression::GetName() const {
 #ifdef DEBUG
 	if (DBConfigOptions::debug_print_bindings) {
-		return Identifier(ToString());
+		return ToString();
 	}
 #endif
-	return !alias.empty() ? alias : Identifier(ToString());
+	return !alias.empty() ? alias : ToString();
 }
 
 bool BaseExpression::Equals(const BaseExpression &other) const {

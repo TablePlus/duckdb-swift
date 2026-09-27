@@ -11,7 +11,6 @@
 #include "duckdb/storage/table/chunk_info.hpp"
 #include "duckdb/storage/statistics/segment_statistics.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
-#include "duckdb/common/enums/column_segment_info_scan_type.hpp"
 #include "duckdb/common/enums/scan_options.hpp"
 #include "duckdb/storage/table/per_column_metadata_blocks.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -27,7 +26,6 @@ class BlockManager;
 class ColumnData;
 class DatabaseInstance;
 class DataTable;
-class DuckTableEntry;
 class PartialBlockManager;
 struct DataTableInfo;
 class ExpressionExecutor;
@@ -56,7 +54,6 @@ class StorageCommitState;
 template <class T>
 struct SegmentNode;
 enum class ColumnDataType;
-class ClientContext;
 
 struct RowGroupWriteInfo {
 	RowGroupWriteInfo(PartialBlockManager &manager, const vector<CompressionType> &compression_types,
@@ -129,9 +126,9 @@ public:
 
 	unique_ptr<RowGroup> AlterType(RowGroupCollection &collection, const LogicalType &target_type, idx_t changed_idx,
 	                               ExpressionExecutor &executor, CollectionScanState &scan_state,
-	                               SegmentNode<RowGroup> &node, DataChunk &scan_chunk, TransactionData transaction);
+	                               SegmentNode<RowGroup> &node, DataChunk &scan_chunk);
 	unique_ptr<RowGroup> AddColumn(RowGroupCollection &collection, ColumnDefinition &new_column,
-	                               ExpressionExecutor &executor);
+	                               ExpressionExecutor &executor, Vector &intermediate);
 	unique_ptr<RowGroup> RemoveColumn(RowGroupCollection &collection, idx_t removed_column);
 
 	//! Accumulates this row group's on-disk blocks into the drop state.
@@ -149,7 +146,7 @@ public:
 	bool InitializeScanWithOffset(CollectionScanState &state, SegmentNode<RowGroup> &node, idx_t vector_offset);
 	//! Checks the given set of table filters against the row-group statistics. Returns false if the entire row group
 	//! can be skipped.
-	bool CheckZonemap(optional_ptr<ClientContext> context, ScanFilterInfo &filters, idx_t row_start);
+	bool CheckZonemap(ScanFilterInfo &filters);
 	//! Checks the given set of table filters against the per-segment statistics. Returns false if any segments were
 	//! skipped.
 	bool CheckZonemapSegments(CollectionScanState &state);
@@ -158,14 +155,11 @@ public:
 
 	idx_t GetSelVector(ScanOptions options, idx_t vector_idx, SelectionVector &sel_vector, idx_t max_count);
 
-	//! Bulk visibility check. For each offset in [0, count), writes the input index into `visible_sel` if that row is
-	//! visible to the transaction. Returns the number of visible rows.
-	idx_t Fetch(TransactionData transaction, const idx_t *offsets, idx_t count, SelectionVector &visible_sel);
-	//! Bulk row fetch. For each `i` in [0, visible_count), fetches the row at `offsets[visible_sel.get_index(i)]`
-	//! and writes every requested column into `result.data[col_idx][result_offset + i]`.
-	void FetchRows(TransactionData transaction, ColumnFetchState &state, const vector<StorageIndex> &column_ids,
-	               const idx_t *offsets, const SelectionVector &visible_sel, idx_t visible_count, DataChunk &result,
-	               idx_t result_offset);
+	//! For a specific row, returns true if it should be used for the transaction and false otherwise.
+	bool Fetch(TransactionData transaction, idx_t row);
+	//! Fetch a specific row from the row_group and insert it into the result at the specified index
+	void FetchRow(TransactionData transaction, ColumnFetchState &state, const vector<StorageIndex> &column_ids,
+	              row_t row_id, DataChunk &result, idx_t result_idx);
 
 	//! Append count rows to the version info
 	void AppendVersionInfo(TransactionData transaction, idx_t count);
@@ -177,8 +171,7 @@ public:
 	void CleanupAppend(transaction_t lowest_transaction, idx_t start, idx_t count);
 
 	//! Delete the given set of rows in the version manager
-	idx_t Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *row_ids, idx_t count,
-	             idx_t row_group_start);
+	idx_t Delete(TransactionData transaction, DataTable &table, row_t *row_ids, idx_t count, idx_t row_group_start);
 
 	static vector<RowGroupWriteData> WriteToDisk(RowGroupWriteInfo &info,
 	                                             const vector<const_reference<RowGroup>> &row_groups);
@@ -196,15 +189,14 @@ public:
 	bool IsPersistent() const;
 	PersistentRowGroupData SerializeRowGroupInfo(idx_t row_group_start) const;
 
-	static void InitializeAppend(SegmentNode<RowGroup> &row_group, RowGroupAppendState &append_state);
+	void InitializeAppend(RowGroupAppendState &append_state);
 	void Append(RowGroupAppendState &append_state, DataChunk &chunk, idx_t append_count);
-	void FinalizeAppend(RowGroupAppendState &append_state);
 
-	void Update(TransactionData transaction, DuckTableEntry &table_entry, DataChunk &updates, row_t *ids, idx_t offset,
+	void Update(TransactionData transaction, DataTable &data_table, DataChunk &updates, row_t *ids, idx_t offset,
 	            idx_t count, const vector<PhysicalIndex> &column_ids, idx_t row_group_start);
 	//! Update a single column; corresponds to DataTable::UpdateColumn
 	//! This method should only be called from the WAL
-	void UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry, DataChunk &updates, Vector &row_ids,
+	void UpdateColumn(TransactionData transaction, DataTable &data_table, DataChunk &updates, Vector &row_ids,
 	                  idx_t offset, idx_t count, const vector<column_t> &column_path, idx_t row_group_start);
 
 	void MergeStatistics(idx_t column_idx, const BaseStatistics &other);
@@ -213,9 +205,8 @@ public:
 	unique_ptr<BaseStatistics> GetStatistics(idx_t column_idx) const;
 	unique_ptr<BaseStatistics> GetStatistics(const StorageIndex &column_idx) const;
 
-	void GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<ColumnSegmentInfo> &result,
-	                          const ColumnSegmentInfoScanOptions &options = ColumnSegmentInfoScanOptions {});
-	static PartitionStatistics GetPartitionStats(SegmentNode<RowGroup> &row_group, TransactionData transaction);
+	void GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<ColumnSegmentInfo> &result);
+	static PartitionStatistics GetPartitionStats(SegmentNode<RowGroup> &row_group);
 
 	idx_t GetAllocationSize() const {
 		return allocation_size;
@@ -244,7 +235,6 @@ public:
 	ColumnData &GetRawColumnData(storage_t c) const;
 
 private:
-	void InitializeAppendInternal(RowGroupAppendState &append_state);
 	optional_ptr<RowVersionManager> GetVersionInfo();
 	optional_ptr<RowVersionManager> GetVersionInfoIfLoaded() const;
 	shared_ptr<RowVersionManager> GetOrCreateVersionInfoPtr();
@@ -256,7 +246,6 @@ private:
 	ColumnData &GetColumn(const StorageIndex &c) const;
 	vector<shared_ptr<ColumnData>> &GetColumns();
 	void LoadRowIdColumnData() const;
-	void LoadRowNumberColumnData() const;
 	void SetCount(idx_t count);
 	bool ColumnIsLoaded(storage_t c) const;
 	void UnloadColumn(storage_t c);
@@ -283,10 +272,6 @@ private:
 	mutable unique_ptr<ColumnData> row_id_column_data;
 	//! Whether or not `row_id_column_data` is loaded (mutable because `const` can lazy load)
 	mutable atomic<bool> row_id_is_loaded;
-	//! The row number column data (mutable because `const` can lazy load)
-	mutable unique_ptr<ColumnData> row_number_column_data;
-	//! Whether or not `row_number_column_data` is loaded (mutable because `const` can lazy load)
-	mutable atomic<bool> row_number_is_loaded;
 	atomic<bool> has_changes;
 };
 

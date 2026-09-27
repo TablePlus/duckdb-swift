@@ -25,33 +25,17 @@ class BlockingConcurrentQueue;
 
 struct ProducerToken {
 	//! Constructor
-	template <typename T>
-	explicit ProducerToken(ConcurrentQueue<T> &) {
-	}
+	template <typename T, typename Traits>
+	explicit ProducerToken(ConcurrentQueue<T> &);
 	//! Constructor
-	template <typename T>
-	explicit ProducerToken(BlockingConcurrentQueue<T> &) {
-	}
-	//! Move constructor
+	template <typename T, typename Traits>
+	explicit ProducerToken(BlockingConcurrentQueue<T> &);
+	//! Constructor
 	ProducerToken(ProducerToken &&) {
 	}
 	//! Is valid token?
 	inline bool valid() const {
 		return true;
-	}
-};
-
-struct ConsumerToken {
-	//! Constructor
-	template <typename T>
-	explicit ConsumerToken(ConcurrentQueue<T> &) {
-	}
-	//! Constructor
-	template <typename T>
-	explicit ConsumerToken(BlockingConcurrentQueue<T> &) {
-	}
-	//! Move constructor
-	ConsumerToken(ConsumerToken &&) {
 	}
 };
 
@@ -100,11 +84,6 @@ public:
 		}
 		return max;
 	}
-	//! Dequeues several elements from the queue using a consumer token.
-	template <typename It>
-	size_t try_dequeue_bulk(ConsumerToken &, It itemFirst, size_t max) {
-		return try_dequeue_bulk(itemFirst, max);
-	}
 
 	template <typename It>
 	bool enqueue_bulk(It itemFirst, size_t count) {
@@ -112,11 +91,6 @@ public:
 			q.push(std::move(*itemFirst++));
 		}
 		return true;
-	}
-	//! Enqueues several elements using a producer token.
-	template <typename It>
-	bool enqueue_bulk(ProducerToken const &, It itemFirst, size_t count) {
-		return enqueue_bulk(itemFirst, count);
 	}
 };
 

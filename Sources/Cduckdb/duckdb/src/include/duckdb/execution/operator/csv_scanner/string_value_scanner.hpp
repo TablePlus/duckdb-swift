@@ -180,8 +180,8 @@ public:
 	StringValueResult(CSVStates &states, CSVStateMachine &state_machine,
 	                  const shared_ptr<CSVBufferHandle> &buffer_handle, Allocator &buffer_allocator,
 	                  idx_t result_size_p, idx_t buffer_position, CSVErrorHandler &error_handler, CSVIterator &iterator,
-	                  shared_ptr<CSVFileScan> csv_file_scan, idx_t &lines_read, bool sniffing, const string &path,
-	                  idx_t scan_id, bool &used_unstrictness);
+	                  bool store_line_size, shared_ptr<CSVFileScan> csv_file_scan, idx_t &lines_read, bool sniffing,
+	                  const string &path, idx_t scan_id, bool &used_unstrictness);
 
 	~StringValueResult();
 
@@ -191,7 +191,7 @@ public:
 
 	//! Variables to iterate over the CSV buffers
 
-	const char *buffer_ptr;
+	char *buffer_ptr;
 	idx_t buffer_size;
 	idx_t position_before_comment;
 
@@ -218,6 +218,7 @@ public:
 	FullLinePosition current_line_position;
 	//! Used for CSV line reconstruction on flushed errors
 	unordered_map<idx_t, FullLinePosition> line_positions_per_row;
+	bool store_line_size = false;
 	bool added_last_line = false;
 	bool quoted_new_line = false;
 
@@ -320,7 +321,7 @@ public:
 	                   const shared_ptr<CSVStateMachine> &state_machine,
 	                   const shared_ptr<CSVErrorHandler> &error_handler, const shared_ptr<CSVFileScan> &csv_file_scan,
 	                   bool sniffing = false, const CSVIterator &boundary = {},
-	                   idx_t result_size = STANDARD_VECTOR_SIZE, bool can_suspend = false);
+	                   idx_t result_size = STANDARD_VECTOR_SIZE);
 
 	StringValueScanner(const shared_ptr<CSVBufferManager> &buffer_manager,
 	                   const shared_ptr<CSVStateMachine> &state_machine,
@@ -348,15 +349,6 @@ public:
 	//! Gets validation line information
 	ValidatorLine GetValidationLine();
 
-	//! Whether the scanner is suspended waiting for a buffer
-	bool IsSuspended() const {
-		return suspended;
-	}
-	//! The buffer a suspended scanner is waiting for
-	idx_t PendingBufferIdx() const {
-		return pending_buffer_idx;
-	}
-
 	const idx_t scanner_idx;
 	//! We use the max of idx_t to signify this is a line finder scanner.
 	static constexpr idx_t LINE_FINDER_ID = NumericLimits<idx_t>::Maximum();
@@ -365,32 +357,16 @@ public:
 	shared_ptr<CSVBufferUsage> buffer_tracker;
 
 private:
-	//! Result of trying to move to the next buffer
-	enum class MoveBufferResult : uint8_t {
-		MOVED,        //! Advanced to the next buffer, stitching any value that straddled the edge
-		NOT_MOVED,    //! The buffer still has bytes left, or the file has ended
-		NOT_IN_MEMORY //! The next buffer is not in memory, the scanner suspended on its load
-	};
-
 	void Initialize() override;
 
 	void FinalizeChunkProcess() override;
-
-	//! Continues a chunk that suspended on a buffer load
-	void ResumeParse();
 
 	//! Function used to process values that go over the first buffer, extra allocation might be necessary
 	void ProcessOverBufferValue();
 
 	void ProcessExtraRow();
 	//! Function used to move from one buffer to the other, if necessary
-	MoveBufferResult TryMoveToNextBuffer();
-	//! Move to the next buffer and processes the value straddling the buffer edge
-	void FinishMoveToNextBuffer(shared_ptr<CSVBufferHandle> next_buffer);
-	//! Tail of the boundary chunk finalization, runs after the move past the boundary end
-	void FinishBoundaryScan(bool moved);
-	//! Processes buffers until the chunk is full or the file ends
-	void ProcessRemainingBuffers();
+	bool MoveToNextBuffer();
 
 	//! -------- Functions used to figure out where lines start ---------!//
 	//! Main function, sets the correct start
@@ -411,12 +387,6 @@ private:
 	shared_ptr<CSVBufferHandle> previous_buffer_handle;
 	//! Strict state machine is basically a state machine with rfc 4180 set to true, used to figure out a new line.
 	shared_ptr<CSVStateMachine> state_machine_strict;
-	//! Whether this scanner is allowed to pause for I/O. sniffing/line-finding/skipping can't pause.
-	const bool can_suspend;
-	//! Set when the scanner suspends on a buffer not in memory
-	bool suspended = false;
-	//! The buffer a suspension waits on, a scanner suspends at most once per buffer
-	idx_t pending_buffer_idx = 0;
 };
 
 } // namespace duckdb

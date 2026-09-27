@@ -8,22 +8,18 @@
 
 #pragma once
 
-#include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/storage/table/table_index_list.hpp"
+#include "duckdb/storage/storage_lock.hpp"
 
 namespace duckdb {
-class AttachedDatabase;
 class DatabaseInstance;
-struct CheckpointOptions;
 class TableIOManager;
-class RowGroupCollection;
 
 struct DataTableInfo {
 	friend class DataTable;
 
 public:
-	DataTableInfo(AttachedDatabase &db, shared_ptr<TableIOManager> table_io_manager_p, Identifier schema,
-	              Identifier table);
+	DataTableInfo(AttachedDatabase &db, shared_ptr<TableIOManager> table_io_manager_p, string schema, string table);
 
 	//! Bind unknown indexes throwing an exception if binding fails.
 	//! Only binds the specified index type, or all, if nullptr.
@@ -32,7 +28,7 @@ public:
 	//! Whether or not the table is temporary
 	bool IsTemporary() const;
 
-	AttachedDatabase &GetDB() const {
+	AttachedDatabase &GetDB() {
 		return db;
 	}
 
@@ -44,7 +40,7 @@ public:
 		return indexes;
 	}
 	//! Find and move out an IndexStorageInfo by name from the stored collection.
-	IndexStorageInfo ExtractIndexStorageInfo(const Identifier &name);
+	IndexStorageInfo ExtractIndexStorageInfo(const string &name);
 	unique_ptr<StorageLockKey> GetSharedLock() {
 		return checkpoint_lock.GetSharedLock();
 	}
@@ -52,9 +48,9 @@ public:
 	optional_idx CheckpointRowGroupCount(const CheckpointOptions &options) const;
 	void VerifyIndexBuffers();
 
-	Identifier GetSchemaName();
-	Identifier GetTableName();
-	void SetTableName(Identifier name);
+	string GetSchemaName();
+	string GetTableName();
+	void SetTableName(string name);
 
 private:
 	//! The database instance of the table
@@ -64,9 +60,9 @@ private:
 	//! Lock for modifying the name
 	mutex name_lock;
 	//! The schema of the table
-	Identifier schema;
+	string schema;
 	//! The name of the table
-	Identifier table;
+	string table;
 	//! The physical list of indexes of this table
 	TableIndexList indexes;
 	//! Index storage information of the indexes created by this table

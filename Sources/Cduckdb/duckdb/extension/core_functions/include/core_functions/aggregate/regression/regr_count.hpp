@@ -16,6 +16,11 @@
 namespace duckdb {
 
 struct RegrCountFunction {
+	template <class STATE>
+	static void Initialize(STATE &state) {
+		state = 0;
+	}
+
 	template <class STATE, class OP>
 	static void Combine(const STATE &source, STATE &target, AggregateInputData &) {
 		target += source;

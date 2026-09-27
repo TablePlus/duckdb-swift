@@ -10,24 +10,6 @@
 
 namespace duckdb {
 
-static unique_ptr<Expression> TryRemoveEmptyStringConcat(ClientContext &context, BoundFunctionExpression &root) {
-	if (root.GetReturnType().id() != LogicalTypeId::VARCHAR) {
-		return nullptr;
-	}
-	auto &children = root.GetChildrenMutable();
-	for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
-		if (!children[child_idx]->IsFoldable()) {
-			continue;
-		}
-		auto value = ExpressionExecutor::EvaluateScalar(context, *children[child_idx]);
-		if (value.IsNull() || value.type().id() != LogicalTypeId::VARCHAR || !StringValue::Get(value).empty()) {
-			continue;
-		}
-		return std::move(children[1 - child_idx]);
-	}
-	return nullptr;
-}
-
 EmptyNeedleRemovalRule::EmptyNeedleRemovalRule(ExpressionRewriter &rewriter) : Rule(rewriter) {
 	// match on a FunctionExpression that has a foldable ConstantExpression
 	auto func = make_uniq<FunctionExpressionMatcher>();
@@ -35,7 +17,7 @@ EmptyNeedleRemovalRule::EmptyNeedleRemovalRule(ExpressionRewriter &rewriter) : R
 	func->matchers.push_back(make_uniq<ExpressionMatcher>());
 	func->policy = SetMatcher::Policy::SOME;
 
-	identifier_set_t functions = {"prefix", "contains", "suffix", "||"};
+	unordered_set<string> functions = {"prefix", "contains", "suffix"};
 	func->function = make_uniq<ManyFunctionMatcher>(functions);
 	root = std::move(func);
 }
@@ -43,17 +25,14 @@ EmptyNeedleRemovalRule::EmptyNeedleRemovalRule(ExpressionRewriter &rewriter) : R
 unique_ptr<Expression> EmptyNeedleRemovalRule::Apply(LogicalOperator &op, vector<reference<Expression>> &bindings,
                                                      bool &changes_made, bool is_root) {
 	auto &root = bindings[0].get().Cast<BoundFunctionExpression>();
-	D_ASSERT(root.GetChildren().size() == 2);
-	if (root.Function().GetName() == "||") {
-		return TryRemoveEmptyStringConcat(GetContext(), root);
-	}
+	D_ASSERT(root.children.size() == 2);
 	auto &prefix_expr = bindings[2].get();
 
 	// the constant_expr is a scalar expression that we have to fold
 	if (!prefix_expr.IsFoldable()) {
 		return nullptr;
 	}
-	D_ASSERT(root.GetReturnType().id() == LogicalTypeId::BOOLEAN);
+	D_ASSERT(root.return_type.id() == LogicalTypeId::BOOLEAN);
 
 	auto prefix_value = ExpressionExecutor::EvaluateScalar(GetContext(), prefix_expr);
 
@@ -61,7 +40,7 @@ unique_ptr<Expression> EmptyNeedleRemovalRule::Apply(LogicalOperator &op, vector
 		return make_uniq<BoundConstantExpression>(Value(LogicalType::BOOLEAN));
 	}
 
-	D_ASSERT(prefix_value.type() == prefix_expr.GetReturnType());
+	D_ASSERT(prefix_value.type() == prefix_expr.return_type);
 	if (prefix_value.type().InternalType() != PhysicalType::VARCHAR) {
 		return nullptr;
 	}
@@ -71,7 +50,7 @@ unique_ptr<Expression> EmptyNeedleRemovalRule::Apply(LogicalOperator &op, vector
 	// PREFIX(NULL, '') is NULL
 	// so rewrite PREFIX(x, '') to TRUE_OR_NULL(x)
 	if (needle_string.empty()) {
-		return ExpressionRewriter::ConstantOrNull(std::move(root.GetChildrenMutable()[0]), Value::BOOLEAN(true));
+		return ExpressionRewriter::ConstantOrNull(std::move(root.children[0]), Value::BOOLEAN(true));
 	}
 	return nullptr;
 }

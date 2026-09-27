@@ -6,9 +6,6 @@
 #include "duckdb/common/pair.hpp"
 #include "duckdb/common/types/string_type.hpp"
 #include "duckdb/common/types/vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/list_vector.hpp"
-#include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/common/enums/order_type.hpp"
 #include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/function/create_sort_key.hpp"
@@ -171,12 +168,6 @@ private:
 	idx_t size;
 };
 
-struct List {
-	uint32_t capacity;
-	uint32_t size;
-	List *next;
-};
-
 template <class K, class V, class K_COMPARATOR>
 class BinaryAggregateHeap {
 	using STORAGE_TYPE = pair<HeapEntry<K>, HeapEntry<V>>;
@@ -311,16 +302,17 @@ struct MinMaxFixedValue {
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
-		FlatVector::GetDataMutable<T>(vector)[idx] = value;
+		FlatVector::GetData<T>(vector)[idx] = value;
 	}
 
 	// Nothing to do here
-	static EXTRA_STATE CreateExtraState() {
+	static EXTRA_STATE CreateExtraState(Vector &input, idx_t count) {
 		return false;
 	}
 
-	static void PrepareData(const Vector &input, EXTRA_STATE &, UnifiedVectorFormat &format, const bool nulls_last) {
-		input.ToUnifiedFormat(format);
+	static void PrepareData(Vector &input, const idx_t count, EXTRA_STATE &, UnifiedVectorFormat &format,
+	                        const bool nulls_last) {
+		input.ToUnifiedFormat(count, format);
 	}
 };
 
@@ -333,16 +325,17 @@ struct MinMaxStringValue {
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
-		FlatVector::GetDataMutable<string_t>(vector)[idx] = StringVector::AddStringOrBlob(vector, value);
+		FlatVector::GetData<string_t>(vector)[idx] = StringVector::AddStringOrBlob(vector, value);
 	}
 
 	// Nothing to do here
-	static EXTRA_STATE CreateExtraState() {
+	static EXTRA_STATE CreateExtraState(Vector &input, idx_t count) {
 		return false;
 	}
 
-	static void PrepareData(const Vector &input, EXTRA_STATE &, UnifiedVectorFormat &format, const bool nulls_last) {
-		input.ToUnifiedFormat(format);
+	static void PrepareData(Vector &input, const idx_t count, EXTRA_STATE &, UnifiedVectorFormat &format,
+	                        const bool nulls_last) {
+		input.ToUnifiedFormat(count, format);
 	}
 };
 
@@ -361,17 +354,17 @@ struct MinMaxFallbackValue {
 		CreateSortKeyHelpers::DecodeSortKey(value, vector, idx, modifiers);
 	}
 
-	static EXTRA_STATE CreateExtraState() {
+	static EXTRA_STATE CreateExtraState(Vector &input, idx_t count) {
 		return Vector(LogicalTypeId::BLOB);
 	}
 
-	static void PrepareData(const Vector &input, EXTRA_STATE &extra_state, UnifiedVectorFormat &format,
+	static void PrepareData(Vector &input, const idx_t count, EXTRA_STATE &extra_state, UnifiedVectorFormat &format,
 	                        const bool nulls_last) {
 		auto order_by_null_type = nulls_last ? OrderByNullType::NULLS_LAST : OrderByNullType::NULLS_FIRST;
 		const OrderModifiers modifiers(OrderType::ASCENDING, order_by_null_type);
-		CreateSortKeyHelpers::CreateSortKeyWithValidity(input, extra_state, modifiers);
-		input.Flatten();
-		extra_state.ToUnifiedFormat(format);
+		CreateSortKeyHelpers::CreateSortKeyWithValidity(input, extra_state, modifiers, count);
+		input.Flatten(count);
+		extra_state.ToUnifiedFormat(count, format);
 	}
 };
 
@@ -406,17 +399,17 @@ struct MinMaxFixedValueOrNull {
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
-		FlatVector::ValidityMutable(vector).Set(idx, value.is_valid);
-		FlatVector::GetDataMutable<T>(vector)[idx] = value.value;
+		FlatVector::Validity(vector).Set(idx, value.is_valid);
+		FlatVector::GetData<T>(vector)[idx] = value.value;
 	}
 
-	static EXTRA_STATE CreateExtraState() {
+	static EXTRA_STATE CreateExtraState(Vector &input, idx_t count) {
 		return false;
 	}
 
-	static void PrepareData(const Vector &input, EXTRA_STATE &extra_state, UnifiedVectorFormat &format,
+	static void PrepareData(Vector &input, const idx_t count, EXTRA_STATE &extra_state, UnifiedVectorFormat &format,
 	                        const bool nulls_last) {
-		input.ToUnifiedFormat(format);
+		input.ToUnifiedFormat(count, format);
 	}
 };
 
@@ -424,6 +417,11 @@ struct MinMaxFixedValueOrNull {
 // MinMaxN Operation (common for both ArgMinMaxN and MinMaxN)
 //------------------------------------------------------------------------------
 struct MinMaxNOperation {
+	template <class STATE>
+	static void Initialize(STATE &state) {
+		new (&state) STATE();
+	}
+
 	template <class STATE, class OP>
 	static void Combine(const STATE &source, STATE &target, AggregateInputData &aggr_input) {
 		if (!source.is_initialized) {
@@ -442,16 +440,17 @@ struct MinMaxNOperation {
 	}
 
 	template <class STATE>
-	static void Finalize(Vector &state_vector, AggregateFinalizeInputData &input_data, Vector &result, idx_t count,
+	static void Finalize(Vector &state_vector, AggregateInputData &input_data, Vector &result, idx_t count,
 	                     idx_t offset) {
 		// We only expect bind data from arg_max, otherwise nulls last is the default
 		const bool nulls_last =
 		    input_data.bind_data ? input_data.bind_data->Cast<ArgMinMaxFunctionData>().nulls_last : true;
 
 		UnifiedVectorFormat state_format;
-		state_vector.ToUnifiedFormat(state_format);
+		state_vector.ToUnifiedFormat(count, state_format);
 
 		const auto states = UnifiedVectorFormat::GetData<STATE *>(state_format);
+		auto &mask = FlatVector::Validity(result);
 
 		const auto old_len = ListVector::GetListSize(result);
 
@@ -466,24 +465,24 @@ struct MinMaxNOperation {
 		// Resize the list vector to fit the new entries
 		ListVector::Reserve(result, old_len + new_entries);
 
-		auto result_data = FlatVector::Writer<list_entry_t>(result, count, offset);
-		auto &child_data = ListVector::GetChildMutable(result);
+		const auto list_entries = FlatVector::GetData<list_entry_t>(result);
+		auto &child_data = ListVector::GetEntry(result);
 
 		idx_t current_offset = old_len;
 		for (idx_t i = 0; i < count; i++) {
+			const auto rid = i + offset;
 			const auto state_idx = state_format.sel->get_index(i);
 			auto &state = *states[state_idx];
 
 			if (!state.is_initialized || state.heap.IsEmpty()) {
-				result_data.WriteNull();
+				mask.SetInvalid(rid);
 				continue;
 			}
 
 			// Add the entries to the list vector
-			list_entry_t list_entry;
+			auto &list_entry = list_entries[rid];
 			list_entry.offset = current_offset;
 			list_entry.length = state.heap.Size();
-			result_data.WriteValue(list_entry);
 
 			// Turn the heap into a sorted list, invalidating the heap property
 			auto heap = state.heap.SortAndGetHeap();
@@ -495,7 +494,7 @@ struct MinMaxNOperation {
 
 		D_ASSERT(current_offset == old_len + new_entries);
 		ListVector::SetListSize(result, current_offset);
-		result.Verify();
+		result.Verify(count);
 	}
 
 	template <class STATE>

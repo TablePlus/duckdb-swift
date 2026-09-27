@@ -49,6 +49,7 @@ public:
 class ArrowArrayStreamWrapper {
 public:
 	ArrowArrayStream arrow_array_stream;
+	int64_t number_of_rows;
 
 public:
 	void GetSchema(ArrowSchemaWrapper &schema);

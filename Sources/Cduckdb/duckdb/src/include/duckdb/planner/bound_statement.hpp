@@ -32,7 +32,7 @@ struct ExtraBoundInfo {
 struct BoundStatement {
 	unique_ptr<LogicalOperator> plan;
 	vector<LogicalType> types;
-	vector<Identifier> names;
+	vector<string> names;
 	ExtraBoundInfo extra_info;
 };
 

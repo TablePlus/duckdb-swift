@@ -1,6 +1,5 @@
 #include "duckdb/optimizer/filter_pushdown.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
-#include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
@@ -35,7 +34,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownWindow(unique_ptr<LogicalOpe
 	auto &window = op->Cast<LogicalWindow>();
 	FilterPushdown pushdown(optimizer, convert_mark_joins);
 
-	// 1. Loop through the expressions, find the window expressions and investigate the partitions
+	// 1. Loop throguh the expressions, find the window expressions and investigate the partitions
 	// if a filter applies to a partition in each window expression then you can push the filter
 	// into the children.
 	vector<column_binding_set_t> window_exprs_partition_bindings;
@@ -44,7 +43,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownWindow(unique_ptr<LogicalOpe
 			continue;
 		}
 		auto &window_expr = expr->Cast<BoundWindowExpression>();
-		auto &partitions = window_expr.Partitions();
+		auto &partitions = window_expr.partitions;
 		if (partitions.empty()) {
 			// If any window expression does not have partitions, we cannot push any filters.
 			// all window expressions need to be partitioned by the same column
@@ -58,7 +57,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownWindow(unique_ptr<LogicalOpe
 			// TODO: Add expressions for function expressions like FLOOR, CEIL etc.
 			case ExpressionType::BOUND_COLUMN_REF: {
 				auto &partition_col = partition_expr->Cast<BoundColumnRefExpression>();
-				partition_bindings.insert(partition_col.Binding());
+				partition_bindings.insert(partition_col.binding);
 				break;
 			}
 			default:

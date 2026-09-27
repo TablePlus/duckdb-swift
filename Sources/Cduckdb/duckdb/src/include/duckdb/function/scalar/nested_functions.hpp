@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/function/function_set.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/map.hpp"
@@ -27,7 +26,7 @@ struct ListArgFunctor {
 		return ListVector::GetListSize(list);
 	}
 	static Vector &GetEntry(Vector &list) {
-		return ListVector::GetChildMutable(list);
+		return ListVector::GetEntry(list);
 	}
 };
 
@@ -50,7 +49,7 @@ struct PositionFunctor {
 };
 
 struct MapUtil {
-	static void ReinterpretMap(Vector &target, const Vector &other);
+	static void ReinterpretMap(Vector &target, Vector &other, idx_t count);
 };
 
 struct VariableReturnBindData : public FunctionData {
@@ -67,12 +66,12 @@ struct VariableReturnBindData : public FunctionData {
 		return stype == other.stype;
 	}
 	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-	                      const BoundScalarFunction &function) {
+	                      const ScalarFunction &function) {
 		auto &info = bind_data->Cast<VariableReturnBindData>();
 		serializer.WriteProperty(100, "variable_return_type", info.stype);
 	}
 
-	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, BoundScalarFunction &bound_function) {
+	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, ScalarFunction &bound_function) {
 		auto stype = deserializer.ReadProperty<LogicalType>(100, "variable_return_type");
 		return make_uniq<VariableReturnBindData>(std::move(stype));
 	}

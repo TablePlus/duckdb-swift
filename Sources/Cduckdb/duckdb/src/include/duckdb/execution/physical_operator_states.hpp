@@ -8,11 +8,13 @@
 
 #pragma once
 
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/operator_result_type.hpp"
 #include "duckdb/common/enums/physical_operator_type.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/execution/execution_context.hpp"
+#include "duckdb/optimizer/join_order/join_node.hpp"
 #include "duckdb/parallel/interrupt.hpp"
 #include "duckdb/execution/partition_info.hpp"
 
@@ -32,13 +34,6 @@ public:
 	}
 
 	virtual void Finalize(const PhysicalOperator &op, ExecutionContext &context) {
-	}
-
-	virtual bool SupportsReuse() const {
-		return false;
-	}
-
-	virtual void Reset() {
 	}
 
 	template <class TARGET>
@@ -83,16 +78,6 @@ public:
 
 	SinkFinalizeType state;
 
-	virtual bool SupportsReuse() const {
-		return false;
-	}
-
-	virtual void Reset(ClientContext &context) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		ResetBlocking();
-		state = SinkFinalizeType::READY;
-	}
-
 	template <class TARGET>
 	TARGET &Cast() {
 		DynamicCastCheck<TARGET>(this);
@@ -117,13 +102,6 @@ public:
 	//! Source partition info
 	SourcePartitionInfo partition_info;
 
-	virtual bool SupportsReuse() const {
-		return false;
-	}
-
-	virtual void Reset(ExecutionContext &context, GlobalSinkState &gstate) {
-	}
-
 	template <class TARGET>
 	TARGET &Cast() {
 		DynamicCastCheck<TARGET>(this);
@@ -145,15 +123,6 @@ public:
 		return 1;
 	}
 
-	virtual bool SupportsReuse() const {
-		return false;
-	}
-
-	virtual void Reset(ClientContext &context) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		ResetBlocking();
-	}
-
 	template <class TARGET>
 	TARGET &Cast() {
 		DynamicCastCheck<TARGET>(this);
@@ -169,13 +138,6 @@ public:
 class LocalSourceState {
 public:
 	virtual ~LocalSourceState() {
-	}
-
-	virtual bool SupportsReuse() const {
-		return false;
-	}
-
-	virtual void Reset(ExecutionContext &context, GlobalSourceState &gstate) {
 	}
 
 	template <class TARGET>

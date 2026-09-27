@@ -25,7 +25,7 @@ static void EnableLogging(ClientContext &context, TableFunctionInput &data, Data
 
 	DUCKDB_LOG_WARNING(context, "The logging settings have been changed so you may lose warnings printed in the CLI.\n"
 	                            "To continue printing warnings to the console, set storage='shell_log_storage'.\n"
-	                            "For more info see https://duckdb.org/docs/current/operations_manual/logging/overview.")
+	                            "For more info see https://duckdb.org/docs/stable/operations_manual/logging/overview.")
 
 	auto &log_manager = context.db->GetLogManager();
 
@@ -55,7 +55,7 @@ static unique_ptr<FunctionData> BindEnableLogging(ClientContext &context, TableF
 	bool storage_isset = false;
 
 	for (const auto &param : input.named_parameters) {
-		auto &key = param.first;
+		auto key = StringUtil::Lower(param.first);
 		if (key == "level") {
 			result->config.level = EnumUtil::FromString<LogLevel>(param.second.ToString());
 		} else if (key == "storage") {
@@ -67,8 +67,7 @@ static unique_ptr<FunctionData> BindEnableLogging(ClientContext &context, TableF
 			}
 			auto &children = StructValue::GetChildren(param.second);
 			for (idx_t i = 0; i < children.size(); i++) {
-				result->storage_config[StructType::GetChildName(param.second.type(), i).GetIdentifierName()] =
-				    children[i];
+				result->storage_config[StructType::GetChildName(param.second.type(), i)] = children[i];
 			}
 		} else if (key == "storage_path") {
 			result->storage_config["path"] = param.second;
@@ -168,7 +167,7 @@ void EnableLoggingFun::RegisterFunction(BuiltinFunctions &set) {
 	enable_fun.named_parameters.emplace("storage_normalize", LogicalType::BOOLEAN);
 	enable_fun.named_parameters.emplace("storage_buffer_size", LogicalType::UBIGINT);
 
-	enable_fun.SetVarArgs(LogicalType::ANY);
+	enable_fun.varargs = LogicalType::ANY;
 	set.AddFunction(enable_fun);
 
 	auto disable_fun = TableFunction("disable_logging", {}, DisableLogging, BindDisableLogging, nullptr, nullptr);

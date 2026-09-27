@@ -1,12 +1,11 @@
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
 
 #include "duckdb/planner/expression/list.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 
 namespace duckdb {
 
 bool ExpressionMatcher::Match(Expression &expr, vector<reference<Expression>> &bindings) {
-	if (type && !type->Match(expr.GetReturnType())) {
+	if (type && !type->Match(expr.return_type)) {
 		return false;
 	}
 	if (expr_type && !expr_type->Match(expr.GetExpressionType())) {
@@ -38,11 +37,11 @@ bool ComparisonExpressionMatcher::Match(Expression &expr_p, vector<reference<Exp
 	if (!ExpressionMatcher::Match(expr_p, bindings)) {
 		return false;
 	}
-	auto &expr = expr_p.Cast<BoundFunctionExpression>();
-	if (!BoundComparisonExpression::IsComparison(expr.GetExpressionType())) {
-		return false;
-	}
-	return SetMatcher::Match(matchers, expr.GetChildrenMutable(), bindings, policy);
+	auto &expr = expr_p.Cast<BoundComparisonExpression>();
+	vector<reference<Expression>> expressions;
+	expressions.push_back(*expr.left);
+	expressions.push_back(*expr.right);
+	return SetMatcher::Match(matchers, expressions, bindings, policy);
 }
 
 bool CastExpressionMatcher::Match(Expression &expr_p, vector<reference<Expression>> &bindings) {
@@ -53,7 +52,7 @@ bool CastExpressionMatcher::Match(Expression &expr_p, vector<reference<Expressio
 		return true;
 	}
 	auto &expr = expr_p.Cast<BoundCastExpression>();
-	return matcher->Match(*expr.ChildMutable(), bindings);
+	return matcher->Match(*expr.child, bindings);
 }
 
 bool InClauseExpressionMatcher::Match(Expression &expr_p, vector<reference<Expression>> &bindings) {
@@ -65,38 +64,7 @@ bool InClauseExpressionMatcher::Match(Expression &expr_p, vector<reference<Expre
 	    expr.GetExpressionType() == ExpressionType::COMPARE_NOT_IN) {
 		return false;
 	}
-	return SetMatcher::Match(matchers, expr.GetChildrenMutable(), bindings, policy);
-}
-
-InUniformExpressionMatcher::InUniformExpressionMatcher() : ExpressionMatcher(ExpressionClass::BOUND_OPERATOR) {
-	vector<ExpressionType> types;
-	types.emplace_back(ExpressionType::COMPARE_IN);
-	types.emplace_back(ExpressionType::COMPARE_NOT_IN);
-	expr_type = make_uniq<ManyExpressionTypeMatcher>(types);
-}
-
-bool InUniformExpressionMatcher::Match(Expression &expr_p, vector<reference<Expression>> &bindings) {
-	if (!ExpressionMatcher::Match(expr_p, bindings)) {
-		return false;
-	}
-	auto &expr = expr_p.Cast<BoundOperatorExpression>();
-
-	auto &entries = expr.GetChildrenMutable();
-	if (entries.size() < 2) {
-		return false;
-	}
-
-	if (!probe_matcher->Match(*entries[0], bindings)) {
-		return false;
-	}
-
-	for (idx_t i = 1; i < entries.size(); ++i) {
-		if (!child_matcher->Match(*entries[i], bindings)) {
-			return false;
-		}
-	}
-
-	return true;
+	return SetMatcher::Match(matchers, expr.children, bindings, policy);
 }
 
 bool ConjunctionExpressionMatcher::Match(Expression &expr_p, vector<reference<Expression>> &bindings) {
@@ -104,7 +72,7 @@ bool ConjunctionExpressionMatcher::Match(Expression &expr_p, vector<reference<Ex
 		return false;
 	}
 	auto &expr = expr_p.Cast<BoundConjunctionExpression>();
-	if (!SetMatcher::Match(matchers, expr.GetChildrenMutable(), bindings, policy)) {
+	if (!SetMatcher::Match(matchers, expr.children, bindings, policy)) {
 		return false;
 	}
 	return true;
@@ -115,10 +83,10 @@ bool FunctionExpressionMatcher::Match(Expression &expr_p, vector<reference<Expre
 		return false;
 	}
 	auto &expr = expr_p.Cast<BoundFunctionExpression>();
-	if (!FunctionMatcher::Match(function, expr.Function().GetName())) {
+	if (!FunctionMatcher::Match(function, expr.function.name)) {
 		return false;
 	}
-	if (!SetMatcher::Match(matchers, expr.GetChildrenMutable(), bindings, policy)) {
+	if (!SetMatcher::Match(matchers, expr.children, bindings, policy)) {
 		return false;
 	}
 	return true;
@@ -129,17 +97,14 @@ bool AggregateExpressionMatcher::Match(Expression &expr_p, vector<reference<Expr
 		return false;
 	}
 	auto &expr = expr_p.Cast<BoundAggregateExpression>();
-	if (expr.StateExportMode() == AggregateStateExportMode::STATE_EXPORT) {
-		return false;
-	}
-	if (!FunctionMatcher::Match(function, expr.Function().GetName())) {
+	if (!FunctionMatcher::Match(function, expr.function.name)) {
 		return false;
 	}
 	// we should create matchers for these in the future
-	if (expr.GetFilter() || expr.GetOrderBys() || expr.GetAggregateType() != AggregateType::NON_DISTINCT) {
+	if (expr.filter || expr.order_bys || expr.aggr_type != AggregateType::NON_DISTINCT) {
 		return false;
 	}
-	if (!SetMatcher::Match(matchers, expr.GetChildrenMutable(), bindings, policy)) {
+	if (!SetMatcher::Match(matchers, expr.children, bindings, policy)) {
 		return false;
 	}
 	return true;

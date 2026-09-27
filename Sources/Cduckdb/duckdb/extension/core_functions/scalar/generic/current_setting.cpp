@@ -1,5 +1,6 @@
 #include "core_functions/scalar/generic_functions.hpp"
 
+#include "duckdb/main/database.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -28,17 +29,24 @@ public:
 
 void CurrentSettingFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &info = func_expr.BindInfo()->Cast<CurrentSettingBindData>();
-	result.Reference(info.value, count_t(args.size()));
+	auto &info = func_expr.bind_info->Cast<CurrentSettingBindData>();
+	result.Reference(info.value);
 }
 
-unique_ptr<FunctionData> CurrentSettingBind(BindScalarFunctionInput &input) {
-	auto &context = input.GetClientContext();
-	auto &bound_function = input.GetBoundFunction();
-
-	auto key_val = input.GetNonNullConstant(0);
-	if (StringValue::Get(key_val).empty()) {
-		throw ParserException("Key name for current_setting must not be empty");
+unique_ptr<FunctionData> CurrentSettingBind(ClientContext &context, ScalarFunction &bound_function,
+                                            vector<unique_ptr<Expression>> &arguments) {
+	auto &key_child = arguments[0];
+	if (key_child->return_type.id() == LogicalTypeId::UNKNOWN) {
+		throw ParameterNotResolvedException();
+	}
+	if (key_child->return_type.id() != LogicalTypeId::VARCHAR ||
+	    key_child->return_type.id() != LogicalTypeId::VARCHAR || !key_child->IsFoldable()) {
+		throw ParserException("Key name for current_setting needs to be a constant string");
+	}
+	Value key_val = ExpressionExecutor::EvaluateScalar(context, *key_child);
+	D_ASSERT(key_val.type().id() == LogicalTypeId::VARCHAR);
+	if (key_val.IsNull() || StringValue::Get(key_val).empty()) {
+		throw ParserException("Key name for current_setting needs to be neither NULL nor empty");
 	}
 
 	auto key = StringUtil::Lower(StringValue::Get(key_val));
@@ -56,8 +64,7 @@ unique_ptr<FunctionData> CurrentSettingBind(BindScalarFunctionInput &input) {
 } // namespace
 
 ScalarFunction CurrentSettingFun::GetFunction() {
-	auto fun = ScalarFunction({{"setting_name", LogicalType::VARCHAR}}, LogicalType::ANY, CurrentSettingFunction,
-	                          CurrentSettingBind);
+	auto fun = ScalarFunction({LogicalType::VARCHAR}, LogicalType::ANY, CurrentSettingFunction, CurrentSettingBind);
 	fun.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
 	return fun;
 }

@@ -144,7 +144,7 @@ static void CSVSniffFunction(ClientContext &context, TableFunctionInput &data_p,
 	auto sniffer_options = data.options;
 	sniffer_options.file_path = files[0].path;
 
-	auto buffer_manager = CSVBufferManager::Open(context, sniffer_options, sniffer_options.file_path, false);
+	auto buffer_manager = make_shared_ptr<CSVBufferManager>(context, sniffer_options, sniffer_options.file_path, 0);
 	if (sniffer_options.name_list.empty()) {
 		sniffer_options.name_list = data.names_csv;
 	}
@@ -176,28 +176,29 @@ static void CSVSniffFunction(ClientContext &context, TableFunctionInput &data_p,
 	}
 	string str_opt;
 	string separator = ", ";
-	// Set output (called after all Appends below)
+	// Set output
+	output.SetCardinality(1);
 
 	// 1. Delimiter
 	str_opt = sniffer_options.dialect_options.state_machine_options.delimiter.FormatValue();
-	output.data[0].Append(Value(str_opt));
+	output.SetValue(0, 0, str_opt);
 	// 2. Quote
 	str_opt = sniffer_options.dialect_options.state_machine_options.quote.FormatValue();
-	output.data[1].Append(Value(str_opt));
+	output.SetValue(1, 0, str_opt);
 	// 3. Escape
 	str_opt = sniffer_options.dialect_options.state_machine_options.escape.FormatValue();
-	output.data[2].Append(Value(str_opt));
+	output.SetValue(2, 0, str_opt);
 	// 4. NewLine Delimiter
 	auto new_line_identifier = sniffer_options.NewLineIdentifierToString();
-	output.data[3].Append(Value(new_line_identifier));
+	output.SetValue(3, 0, new_line_identifier);
 	// 5. Comment
 	str_opt = sniffer_options.dialect_options.state_machine_options.comment.FormatValue();
-	output.data[4].Append(Value(str_opt));
+	output.SetValue(4, 0, str_opt);
 	// 6. Skip Rows
-	output.data[5].Append(Value::UINTEGER(NumericCast<uint32_t>(sniffer_options.dialect_options.skip_rows.GetValue())));
+	output.SetValue(5, 0, Value::UINTEGER(NumericCast<uint32_t>(sniffer_options.dialect_options.skip_rows.GetValue())));
 	// 7. Has Header
 	auto has_header = Value::BOOLEAN(sniffer_options.dialect_options.header.GetValue());
-	output.data[6].Append(has_header);
+	output.SetValue(6, 0, has_header);
 	// 8. List<Struct<Column-Name:Types>> {'col1': 'INTEGER', 'col2': 'VARCHAR'}
 	vector<Value> values;
 	std::ostringstream columns;
@@ -206,43 +207,44 @@ static void CSVSniffFunction(ClientContext &context, TableFunctionInput &data_p,
 		child_list_t<Value> struct_children {{"name", sniffer_result.names[i]},
 		                                     {"type", {sniffer_result.return_types[i].ToString()}}};
 		values.emplace_back(Value::STRUCT(struct_children));
-		columns << "'" << sniffer_result.names[i].GetIdentifierName() << "': '"
-		        << sniffer_result.return_types[i].ToString() << "'";
+		columns << "'" << sniffer_result.names[i] << "': '" << sniffer_result.return_types[i].ToString() << "'";
 		if (i != sniffer_result.return_types.size() - 1) {
 			columns << separator;
 		}
 	}
 	columns << "}";
-	output.data[7].Append(Value::LIST(values));
+	output.SetValue(7, 0, Value::LIST(values));
 	// 9. Date Format
 	auto date_format = sniffer_options.dialect_options.date_format[LogicalType::DATE].GetValue();
 	if (!date_format.Empty()) {
-		output.data[8].Append(Value(date_format.format_specifier));
+		output.SetValue(8, 0, date_format.format_specifier);
 	} else {
 		bool has_date = false;
 		for (auto &c_type : sniffer_result.return_types) {
+			// Must be ISO 8601
 			if (c_type.id() == LogicalTypeId::DATE) {
+				output.SetValue(8, 0, Value("%Y-%m-%d"));
 				has_date = true;
-				break;
 			}
 		}
-		// Must be ISO 8601
-		output.data[8].Append(has_date ? Value("%Y-%m-%d") : Value(nullptr));
+		if (!has_date) {
+			output.SetValue(8, 0, Value(nullptr));
+		}
 	}
 
 	// 10. Timestamp Format
 	auto timestamp_format = sniffer_options.dialect_options.date_format[LogicalType::TIMESTAMP].GetValue();
 	if (!timestamp_format.Empty()) {
-		output.data[9].Append(Value(timestamp_format.format_specifier));
+		output.SetValue(9, 0, timestamp_format.format_specifier);
 	} else {
-		output.data[9].Append(Value(nullptr));
+		output.SetValue(9, 0, Value(nullptr));
 	}
 
 	// 11. The Extra User Arguments
 	if (data.options.user_defined_parameters.empty()) {
-		output.data[10].Append(Value());
+		output.SetValue(10, 0, Value());
 	} else {
-		output.data[10].Append(Value(data.options.GetUserDefinedParameters()));
+		output.SetValue(10, 0, Value(data.options.GetUserDefinedParameters()));
 	}
 
 	// 12. csv_read string
@@ -325,7 +327,7 @@ static void CSVSniffFunction(ClientContext &context, TableFunctionInput &data_p,
 		csv_read << separator << data.options.GetUserDefinedParameters();
 	}
 	csv_read << ");";
-	output.data[11].Append(Value(csv_read.str()));
+	output.SetValue(11, 0, csv_read.str());
 	global_state.done = true;
 }
 

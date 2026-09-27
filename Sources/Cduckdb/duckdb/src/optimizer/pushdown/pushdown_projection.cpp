@@ -11,9 +11,10 @@ namespace duckdb {
 static bool IsVolatile(LogicalProjection &proj, const Expression &expr) {
 	bool is_volatile = false;
 	ExpressionIterator::VisitExpression<BoundColumnRefExpression>(expr, [&](const BoundColumnRefExpression &colref) {
-		D_ASSERT(colref.Depth() == 0);
-		auto &proj_expr = proj.GetExpression(colref.Binding());
-		if (proj_expr.IsVolatile()) {
+		D_ASSERT(colref.binding.table_index == proj.table_index);
+		D_ASSERT(colref.binding.column_index < proj.expressions.size());
+		D_ASSERT(colref.depth == 0);
+		if (proj.expressions[colref.binding.column_index]->IsVolatile()) {
 			is_volatile = true;
 		}
 	});
@@ -23,12 +24,13 @@ static bool IsVolatile(LogicalProjection &proj, const Expression &expr) {
 static unique_ptr<Expression> ReplaceProjectionBindings(LogicalProjection &proj, unique_ptr<Expression> root_expr) {
 	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(
 	    root_expr, [&](BoundColumnRefExpression &colref, unique_ptr<Expression> &expr) {
-		    D_ASSERT(colref.Depth() == 0);
+		    D_ASSERT(colref.binding.table_index == proj.table_index);
+		    D_ASSERT(colref.binding.column_index < proj.expressions.size());
+		    D_ASSERT(colref.depth == 0);
 		    // replace the binding with a copy to the expression at the referenced index
-		    auto &proj_expr = proj.GetExpression(colref.Binding());
-		    auto copy = proj_expr.Copy();
-		    if (!colref.GetAlias().empty()) {
-			    copy->SetAlias(colref.GetAlias());
+		    auto copy = proj.expressions[colref.binding.column_index]->Copy();
+		    if (!colref.alias.empty()) {
+			    copy->alias = colref.alias;
 		    }
 		    expr = std::move(copy);
 	    });

@@ -15,83 +15,6 @@
 
 namespace duckdb {
 
-TransactionSecretStorage::TransactionSecretStorage(const string &name_p)
-    : SecretStorage(name_p, TRANSACTION_STORAGE_OFFSET) {
-}
-
-TransactionSecretStorage::~TransactionSecretStorage() = default;
-
-unique_ptr<SecretEntry> TransactionSecretStorage::StoreSecret(unique_ptr<const BaseSecret> secret,
-                                                              OnCreateConflict on_conflict,
-                                                              optional_ptr<CatalogTransaction> transaction) {
-	lock_guard<mutex> guard(lock);
-	auto entry = secrets.find(secret->GetName());
-	if (entry != secrets.end()) {
-		switch (on_conflict) {
-		case OnCreateConflict::ERROR_ON_CONFLICT:
-			throw InvalidInputException("Transaction secret with name '%s' already exists!", secret->GetName());
-		case OnCreateConflict::IGNORE_ON_CONFLICT:
-			return nullptr;
-		case OnCreateConflict::REPLACE_ON_CONFLICT:
-			secrets.erase(entry);
-			break;
-		default:
-			throw InternalException("Unsupported conflict mode for transaction secret");
-		}
-	}
-
-	auto result = make_uniq<SecretEntry>(std::move(secret));
-	result->persist_type = SecretPersistType::TRANSACTION;
-	result->storage_mode = storage_name;
-	auto secret_name = result->secret->GetName();
-	secrets.emplace(secret_name, make_uniq<SecretEntry>(*result));
-	return result;
-}
-
-vector<SecretEntry> TransactionSecretStorage::AllSecrets(optional_ptr<CatalogTransaction> transaction) {
-	lock_guard<mutex> guard(lock);
-	vector<SecretEntry> result;
-	for (auto &entry : secrets) {
-		result.emplace_back(*entry.second);
-	}
-	return result;
-}
-
-void TransactionSecretStorage::DropSecretByName(const Identifier &name, OnEntryNotFound on_entry_not_found,
-                                                optional_ptr<CatalogTransaction> transaction) {
-	lock_guard<mutex> guard(lock);
-	auto entry = secrets.find(name);
-	if (entry == secrets.end()) {
-		if (on_entry_not_found == OnEntryNotFound::THROW_EXCEPTION) {
-			throw InvalidInputException("Failed to remove non-existent transaction secret '%s'", name);
-		}
-		return;
-	}
-	secrets.erase(entry);
-}
-
-SecretMatch TransactionSecretStorage::LookupSecret(const string &path, const string &type,
-                                                   optional_ptr<CatalogTransaction> transaction) {
-	lock_guard<mutex> guard(lock);
-	auto best_match = SecretMatch();
-	for (auto &entry : secrets) {
-		if (entry.second->secret->GetType() == type) {
-			best_match = SelectBestMatch(*entry.second, path, tie_break_offset, best_match);
-		}
-	}
-	return best_match;
-}
-
-unique_ptr<SecretEntry> TransactionSecretStorage::GetSecretByName(const string &name,
-                                                                  optional_ptr<CatalogTransaction> transaction) {
-	lock_guard<mutex> guard(lock);
-	auto entry = secrets.find(Identifier(name));
-	if (entry == secrets.end()) {
-		return nullptr;
-	}
-	return make_uniq<SecretEntry>(*entry->second);
-}
-
 SecretMatch SecretStorage::SelectBestMatch(SecretEntry &secret_entry, const string &path, int64_t offset,
                                            SecretMatch &current_best) {
 	// Get secret match score
@@ -163,21 +86,18 @@ vector<SecretEntry> CatalogSetSecretStorage::AllSecrets(optional_ptr<CatalogTran
 	return ret_value;
 }
 
-void CatalogSetSecretStorage::DropSecretByName(const Identifier &name, OnEntryNotFound on_entry_not_found,
+void CatalogSetSecretStorage::DropSecretByName(const string &name, OnEntryNotFound on_entry_not_found,
                                                optional_ptr<CatalogTransaction> transaction) {
-	auto entry = secrets->GetEntry(GetTransactionOrDefault(transaction), Identifier(name));
-	if (!entry) {
-		if (on_entry_not_found == OnEntryNotFound::THROW_EXCEPTION) {
-			string persist_string = persistent ? "persistent" : "temporary";
-			string storage_string = persistent ? " in secret storage '" + storage_name + "'" : "";
-			throw InvalidInputException("Failed to remove non-existent %s secret '%s'%s", persist_string, name,
-			                            storage_string);
-		}
-		return;
+	auto entry = secrets->GetEntry(GetTransactionOrDefault(transaction), name);
+	if (!entry && on_entry_not_found == OnEntryNotFound::THROW_EXCEPTION) {
+		string persist_string = persistent ? "persistent" : "temporary";
+		string storage_string = persistent ? " in secret storage '" + storage_name + "'" : "";
+		throw InvalidInputException("Failed to remove non-existent %s secret '%s'%s", persist_string, name,
+		                            storage_string);
 	}
 
-	secrets->DropEntry(GetTransactionOrDefault(transaction), Identifier(name), true, true);
-	RemoveSecret(name.GetIdentifierName(), on_entry_not_found);
+	secrets->DropEntry(GetTransactionOrDefault(transaction), name, true, true);
+	RemoveSecret(name, on_entry_not_found);
 }
 
 SecretMatch CatalogSetSecretStorage::LookupSecret(const string &path, const string &type,
@@ -186,7 +106,7 @@ SecretMatch CatalogSetSecretStorage::LookupSecret(const string &path, const stri
 
 	const std::function<void(CatalogEntry &)> callback = [&](CatalogEntry &entry) {
 		auto &cast_entry = entry.Cast<SecretCatalogEntry>();
-		if (cast_entry.secret->secret->GetType() == type) {
+		if (StringUtil::CIEquals(cast_entry.secret->secret->GetType(), type)) {
 			best_match = SelectBestMatch(*cast_entry.secret, path, tie_break_offset, best_match);
 		}
 	};
@@ -201,7 +121,7 @@ SecretMatch CatalogSetSecretStorage::LookupSecret(const string &path, const stri
 
 unique_ptr<SecretEntry> CatalogSetSecretStorage::GetSecretByName(const string &name,
                                                                  optional_ptr<CatalogTransaction> transaction) {
-	auto res = secrets->GetEntry(GetTransactionOrDefault(transaction), Identifier(name));
+	auto res = secrets->GetEntry(GetTransactionOrDefault(transaction), name);
 
 	if (res) {
 		auto &cast_entry = res->Cast<SecretCatalogEntry>();
@@ -218,23 +138,16 @@ LocalFileSecretStorage::LocalFileSecretStorage(SecretManager &manager, DatabaseI
 	persistent = true;
 
 	// Check existence of persistent secret dir
-	try {
-		auto &fs = FileSystem::GetLocal(db);
-		if (fs.DirectoryExists(secret_path)) {
-			fs.ListFiles(secret_path, [&](const string &fname, bool is_dir) {
-				string full_path = fs.JoinPath(secret_path, fname);
+	auto &fs = FileSystem::GetLocal(db);
+	if (fs.DirectoryExists(secret_path)) {
+		fs.ListFiles(secret_path, [&](const string &fname, bool is_dir) {
+			string full_path = fs.JoinPath(secret_path, fname);
 
-				if (StringUtil::EndsWith(full_path, ".duckdb_secret")) {
-					string secret_name = fname.substr(0, fname.size() - 14); // size of file ext
-					persistent_secrets.insert(Identifier(secret_name));
-				}
-			});
-		}
-	} catch (PermissionException &ex) {
-		// If LocalFileSystem is specifically disabled (not all external access), skip loading persistent secrets
-		if (!DBConfig::GetConfig(db).file_system->SubSystemIsDisabled("LocalFileSystem")) {
-			throw;
-		}
+			if (StringUtil::EndsWith(full_path, ".duckdb_secret")) {
+				string secret_name = fname.substr(0, fname.size() - 14); // size of file ext
+				persistent_secrets.insert(secret_name);
+			}
+		});
 	}
 
 	auto &catalog = Catalog::GetSystemCatalog(db);
@@ -279,8 +192,21 @@ void LocalFileSecretStorage::WriteSecret(const BaseSecret &secret, OnCreateConfl
 	// We may need to create the secret dir here if the directory was not present during LocalFileSecretStorage
 	// construction
 	if (!fs.DirectoryExists(secret_path)) {
+		// TODO: recursive directory creation should probably live in filesystem
+		auto sep = fs.PathSeparator(secret_path);
+		auto splits = StringUtil::Split(secret_path, sep);
+		D_ASSERT(!splits.empty());
+		string extension_directory_prefix;
+		if (StringUtil::StartsWith(secret_path, sep)) {
+			extension_directory_prefix = sep; // this is swallowed by Split otherwise
+		}
 		try {
-			fs.CreateDirectoriesRecursive(secret_path);
+			for (auto &split : splits) {
+				extension_directory_prefix = extension_directory_prefix + split + sep;
+				if (!fs.DirectoryExists(extension_directory_prefix)) {
+					fs.CreateDirectory(extension_directory_prefix);
+				}
+			}
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			if (error.Type() == ExceptionType::IO) {
@@ -307,7 +233,7 @@ void LocalFileSecretStorage::WriteSecret(const BaseSecret &secret, OnCreateConfl
 void LocalFileSecretStorage::RemoveSecret(const string &secret, OnEntryNotFound on_entry_not_found) {
 	auto &fs = FileSystem::GetLocal(db);
 	string file = fs.JoinPath(secret_path, secret + ".duckdb_secret");
-	persistent_secrets.erase(Identifier(secret));
+	persistent_secrets.erase(secret);
 	try {
 		fs.RemoveFile(file);
 	} catch (std::exception &ex) {

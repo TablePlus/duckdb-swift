@@ -2,7 +2,7 @@
 
 namespace duckdb {
 
-static inline optional<uint64_t> GetArrayLength(yyjson_val *val, yyjson_alc *, Vector &) {
+static inline uint64_t GetArrayLength(yyjson_val *val, yyjson_alc *, Vector &, ValidityMask &, idx_t) {
 	return yyjson_arr_size(val);
 }
 
@@ -20,13 +20,12 @@ static void ManyArrayLengthFunction(DataChunk &args, ExpressionState &state, Vec
 
 static void GetArrayLengthFunctionsInternal(ScalarFunctionSet &set, const LogicalType &input_type) {
 	set.AddFunction(ScalarFunction({input_type}, LogicalType::UBIGINT, UnaryArrayLengthFunction, nullptr, nullptr,
-	                               JSONFunctionLocalState::Init));
-	set.AddFunction(ScalarFunction({{"json", input_type}, {"path", LogicalType::VARCHAR}}, LogicalType::UBIGINT,
-	                               BinaryArrayLengthFunction, JSONReadFunctionData::Bind, nullptr,
-	                               JSONFunctionLocalState::Init));
-	set.AddFunction(ScalarFunction({{"json", input_type}, {"path", LogicalType::LIST(LogicalType::VARCHAR)}},
+	                               nullptr, JSONFunctionLocalState::Init));
+	set.AddFunction(ScalarFunction({input_type, LogicalType::VARCHAR}, LogicalType::UBIGINT, BinaryArrayLengthFunction,
+	                               JSONReadFunctionData::Bind, nullptr, nullptr, JSONFunctionLocalState::Init));
+	set.AddFunction(ScalarFunction({input_type, LogicalType::LIST(LogicalType::VARCHAR)},
 	                               LogicalType::LIST(LogicalType::UBIGINT), ManyArrayLengthFunction,
-	                               JSONReadManyFunctionData::Bind, nullptr, JSONFunctionLocalState::Init));
+	                               JSONReadManyFunctionData::Bind, nullptr, nullptr, JSONFunctionLocalState::Init));
 }
 
 ScalarFunctionSet JSONFunctions::GetArrayLengthFunction() {
@@ -34,11 +33,10 @@ ScalarFunctionSet JSONFunctions::GetArrayLengthFunction() {
 	GetArrayLengthFunctionsInternal(set, LogicalType::VARCHAR);
 	GetArrayLengthFunctionsInternal(set, LogicalType::JSON());
 	for (auto &func : set.functions) {
-		const auto &sig = func.GetSignature();
-		if (sig.GetParameterCount() == 1 && sig.GetParameter(0).GetType().IsJSONType()) {
+		if (func.arguments.size() == 1 && func.arguments[0].IsJSONType()) {
 			continue;
 		}
-		func.SetFallible();
+		func.errors = FunctionErrors::CAN_THROW_RUNTIME_ERROR;
 	}
 	return set;
 }

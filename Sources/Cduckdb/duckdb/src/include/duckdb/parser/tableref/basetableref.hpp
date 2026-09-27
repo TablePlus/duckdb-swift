@@ -11,7 +11,6 @@
 #include "duckdb/main/table_description.hpp"
 #include "duckdb/parser/tableref.hpp"
 #include "duckdb/parser/tableref/at_clause.hpp"
-#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
 
@@ -21,36 +20,22 @@ public:
 	static constexpr const TableReferenceType TYPE = TableReferenceType::BASE_TABLE;
 
 public:
-	BaseTableRef() : TableRef(TableReferenceType::BASE_TABLE) {
+	BaseTableRef()
+	    : TableRef(TableReferenceType::BASE_TABLE), catalog_name(INVALID_CATALOG), schema_name(INVALID_SCHEMA) {
 	}
 	explicit BaseTableRef(const TableDescription &description)
-	    : TableRef(TableReferenceType::BASE_TABLE),
-	      qualified_name(description.qualified_name.Catalog(), description.qualified_name.Schema(),
-	                     description.qualified_name.Name()) {
+	    : TableRef(TableReferenceType::BASE_TABLE), catalog_name(description.database), schema_name(description.schema),
+	      table_name(description.table) {
 	}
 
+	//! The catalog name.
+	string catalog_name;
+	//! The schema name.
+	string schema_name;
+	//! The table name.
+	string table_name;
 	//! The timestamp/version at which to read this table entry (if any)
 	unique_ptr<AtClause> at_clause;
-
-public:
-	const QualifiedName &GetQualifiedName() const {
-		return qualified_name;
-	}
-	QualifiedName &GetQualifiedNameMutable() {
-		return qualified_name;
-	}
-	void SetQualifiedName(QualifiedName name) {
-		qualified_name = std::move(name);
-	}
-	void SetQualifiedName(Identifier catalog, Identifier schema, Identifier name) {
-		qualified_name = QualifiedName(std::move(catalog), std::move(schema), std::move(name));
-	}
-	const Identifier &Table() const {
-		return qualified_name.Name();
-	}
-	void SetTable(Identifier table) {
-		qualified_name = qualified_name.WithName(std::move(table));
-	}
 
 public:
 	string ToString() const override;
@@ -58,10 +43,6 @@ public:
 	unique_ptr<TableRef> Copy() override;
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<TableRef> Deserialize(Deserializer &source);
-
-private:
-	//! Qualified name of the base table (catalog.schema.table).
-	QualifiedName qualified_name;
 };
 
 } // namespace duckdb

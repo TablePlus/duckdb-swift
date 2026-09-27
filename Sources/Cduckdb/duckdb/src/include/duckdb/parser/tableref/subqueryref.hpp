@@ -21,7 +21,7 @@ private:
 	SubqueryRef();
 
 public:
-	DUCKDB_API explicit SubqueryRef(unique_ptr<SelectStatement> subquery, Identifier alias = Identifier());
+	DUCKDB_API explicit SubqueryRef(unique_ptr<SelectStatement> subquery, string alias = string());
 
 	//! The subquery
 	unique_ptr<SelectStatement> subquery;

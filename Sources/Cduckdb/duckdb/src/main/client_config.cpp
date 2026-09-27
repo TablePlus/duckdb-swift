@@ -4,15 +4,15 @@
 
 namespace duckdb {
 
-static Identifier StringToIdentifier(const String &name) {
-	return Identifier(string(name.data(), name.size()));
+bool ClientConfig::AnyVerification() const {
+	return query_verification_enabled || verify_external || verify_serializer || verify_fetch_row;
 }
 
 void ClientConfig::SetUserVariable(const String &name, Value value) {
-	user_variables[StringToIdentifier(name)] = std::move(value);
+	user_variables[name.ToStdString()] = std::move(value);
 }
 
-bool ClientConfig::GetUserVariable(const Identifier &name, Value &result) {
+bool ClientConfig::GetUserVariable(const string &name, Value &result) {
 	auto entry = user_variables.find(name);
 	if (entry == user_variables.end()) {
 		return false;
@@ -21,12 +21,8 @@ bool ClientConfig::GetUserVariable(const Identifier &name, Value &result) {
 	return true;
 }
 
-bool ClientConfig::GetUserVariable(const string &name, Value &result) {
-	return GetUserVariable(Identifier(name), result);
-}
-
 void ClientConfig::ResetUserVariable(const String &name) {
-	user_variables.erase(StringToIdentifier(name));
+	user_variables.erase(name.ToStdString());
 }
 
 void ClientConfig::SetDefaultStreamingBufferSize() {

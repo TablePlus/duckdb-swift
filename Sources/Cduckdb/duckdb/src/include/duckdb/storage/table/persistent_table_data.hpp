@@ -23,7 +23,6 @@ public:
 	vector<MetaBlockPointer> read_metadata_pointers;
 	TableStatistics table_stats;
 	idx_t total_rows;
-	idx_t next_row_id;
 	idx_t row_group_count;
 	MetaBlockPointer block_pointer;
 };

@@ -25,7 +25,7 @@ unique_ptr<QueryNode> OrderRelation::GetQueryNode() {
 	return std::move(select);
 }
 
-Identifier OrderRelation::GetAlias() {
+string OrderRelation::GetAlias() {
 	return child->GetAlias();
 }
 

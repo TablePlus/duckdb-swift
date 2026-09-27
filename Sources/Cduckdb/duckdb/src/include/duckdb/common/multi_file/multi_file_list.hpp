@@ -12,14 +12,9 @@
 #include "duckdb/common/multi_file/multi_file_options.hpp"
 #include "duckdb/common/extra_operator_info.hpp"
 #include "duckdb/common/open_file_info.hpp"
-#include "duckdb/common/column_index.hpp"
-#include "duckdb/common/enums/file_glob_options.hpp"
 
 namespace duckdb {
 class MultiFileList;
-class NodeStatistics;
-class LogicalGet;
-class TableFilterSet;
 
 enum class FileExpandResult : uint8_t { NO_FILES, SINGLE_FILE, MULTIPLE_FILES };
 enum class MultiFileListScanType { ALWAYS_FETCH, FETCH_IF_AVAILABLE };
@@ -73,11 +68,11 @@ public:
 
 struct MultiFilePushdownInfo {
 	explicit MultiFilePushdownInfo(LogicalGet &get);
-	MultiFilePushdownInfo(TableIndex table_index, const vector<Identifier> &column_names,
-	                      const vector<column_t> &column_ids, ExtraOperatorInfo &extra_info);
+	MultiFilePushdownInfo(idx_t table_index, const vector<string> &column_names, const vector<column_t> &column_ids,
+	                      ExtraOperatorInfo &extra_info);
 
-	TableIndex table_index;
-	const vector<Identifier> &column_names;
+	idx_t table_index;
+	const vector<string> &column_names;
 	vector<column_t> column_ids;
 	vector<ColumnIndex> column_indexes;
 	ExtraOperatorInfo &extra_info;
@@ -109,7 +104,7 @@ public:
 	                                                        MultiFilePushdownInfo &info,
 	                                                        vector<unique_ptr<Expression>> &filters) const;
 	virtual unique_ptr<MultiFileList> DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
-	                                                        const vector<Identifier> &names,
+	                                                        const vector<string> &names,
 	                                                        const vector<LogicalType> &types,
 	                                                        const vector<column_t> &column_ids,
 	                                                        TableFilterSet &filters) const;

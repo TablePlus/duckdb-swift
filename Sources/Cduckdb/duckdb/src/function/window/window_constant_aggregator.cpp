@@ -1,6 +1,5 @@
 #include "duckdb/function/window/window_constant_aggregator.hpp"
 
-#include "duckdb/common/clustered_aggregate.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/function/window/window_aggregate_states.hpp"
 #include "duckdb/function/window/window_shared_expressions.hpp"
@@ -37,7 +36,7 @@ WindowConstantAggregatorGlobalState::WindowConstantAggregatorGlobalState(ClientC
                                                                          const ValidityMask &partition_mask)
     : WindowAggregatorGlobalState(client, aggregator, STANDARD_VECTOR_SIZE), statef(client, aggr) {
 	// Locate the partition boundaries
-	if (partition_mask.CannotHaveNull()) {
+	if (partition_mask.AllValid()) {
 		partition_offsets.emplace_back(0);
 	} else {
 		idx_t entry_idx;
@@ -104,7 +103,7 @@ public:
 
 WindowConstantAggregatorLocalState::WindowConstantAggregatorLocalState(
     ExecutionContext &context, const WindowConstantAggregatorGlobalState &gstate)
-    : WindowAggregatorLocalState(context), gstate(gstate), statep(Value::POINTER(0), count_t(1)),
+    : WindowAggregatorLocalState(context), gstate(gstate), statep(Value::POINTER(0)),
       statef(context.client, gstate.statef.aggr), partition(0) {
 	matches.Initialize();
 
@@ -124,27 +123,27 @@ WindowConstantAggregatorLocalState::WindowConstantAggregatorLocalState(
 // WindowConstantAggregator
 //===--------------------------------------------------------------------===//
 bool WindowConstantAggregator::CanAggregate(const BoundWindowExpression &wexpr) {
-	if (!wexpr.AggregateFunction()) {
+	if (!wexpr.aggregate) {
 		return false;
 	}
 
 	// The function must be able to be used as an aggregate
-	if (!wexpr.AggregateFunction()->CanAggregate()) {
+	if (!wexpr.aggregate->CanAggregate()) {
 		return false;
 	}
 
 	// window exclusion cannot be handled by constant aggregates
-	if (wexpr.WindowExclude() != WindowExcludeMode::NO_OTHER) {
+	if (wexpr.exclude_clause != WindowExcludeMode::NO_OTHER) {
 		return false;
 	}
 
 	// 	DISTINCT aggregation cannot be handled by constant aggregation
-	if (wexpr.Distinct()) {
+	if (wexpr.distinct) {
 		return false;
 	}
 
 	//	COUNT(*) is already handled efficiently by segment trees.
-	if (wexpr.GetChildren().empty()) {
+	if (wexpr.children.empty()) {
 		return false;
 	}
 
@@ -165,11 +164,11 @@ bool WindowConstantAggregator::CanAggregate(const BoundWindowExpression &wexpr) 
 	    offset PRECEDING and offset FOLLOWING options vary in meaning
 	    depending on the frame mode.
 	*/
-	switch (wexpr.WindowStart()) {
+	switch (wexpr.start) {
 	case WindowBoundary::UNBOUNDED_PRECEDING:
 		break;
 	case WindowBoundary::CURRENT_ROW_RANGE:
-		if (!wexpr.OrderBy().empty()) {
+		if (!wexpr.orders.empty()) {
 			return false;
 		}
 		break;
@@ -177,11 +176,11 @@ bool WindowConstantAggregator::CanAggregate(const BoundWindowExpression &wexpr) 
 		return false;
 	}
 
-	switch (wexpr.WindowEnd()) {
+	switch (wexpr.end) {
 	case WindowBoundary::UNBOUNDED_FOLLOWING:
 		break;
 	case WindowBoundary::CURRENT_ROW_RANGE:
-		if (!wexpr.OrderBy().empty()) {
+		if (!wexpr.orders.empty()) {
 			return false;
 		}
 		break;
@@ -202,7 +201,7 @@ WindowConstantAggregator::WindowConstantAggregator(BoundWindowExpression &wexpr,
                                                    ClientContext &context)
     : WindowAggregator(RebindAggregate(context, wexpr)) {
 	// We only need these values for Sink
-	for (auto &child : wexpr.GetChildren()) {
+	for (auto &child : wexpr.children) {
 		child_idx.emplace_back(shared.RegisterSink(child));
 	}
 }
@@ -231,14 +230,14 @@ void WindowConstantAggregatorLocalState::Sink(ExecutionContext &context, DataChu
 	    1;
 
 	auto state_f_data = statef.GetData();
-	auto state_p_data = ConstantVector::GetData<data_ptr_t>(statep);
+	auto state_p_data = FlatVector::GetData<data_ptr_t>(statep);
 
 	auto &child_idx = gstate.aggregator.child_idx;
 	for (column_t c = 0; c < child_idx.size(); ++c) {
 		payload_chunk.data[c].Reference(sink_chunk.data[child_idx[c]]);
 	}
 
-	AggregateInputData aggr_input_data(aggr, statef.allocator);
+	AggregateInputData aggr_input_data(aggr.GetFunctionData(), statef.allocator);
 	idx_t begin = 0;
 	idx_t filter_idx = 0;
 	auto partition_end = partition_offsets[partition + 1];
@@ -264,7 +263,7 @@ void WindowConstantAggregatorLocalState::Sink(ExecutionContext &context, DataChu
 			}
 
 			//	Find the first value in [end, filtered)
-			sel.Initialize(filter_sel->data() + filter_idx, filtered - filter_idx);
+			sel.Initialize(filter_sel->data() + filter_idx);
 			idx_t nsel = 0;
 			for (; filter_idx < filtered; ++filter_idx, ++nsel) {
 				auto idx = filter_sel->get_index(filter_idx);
@@ -278,27 +277,22 @@ void WindowConstantAggregatorLocalState::Sink(ExecutionContext &context, DataChu
 			}
 		} else {
 			//	Slice to [begin, end)
-			if (begin == 0 && end == sink_chunk.size()) {
-				inputs.Reference(payload_chunk);
-			} else {
-				//	we cannot resize non-flat vectors (e.g. dictionary vectors), so we have to slice
+			if (begin) {
 				for (idx_t c = 0; c < payload_chunk.ColumnCount(); ++c) {
 					inputs.data[c].Slice(payload_chunk.data[c], begin, end);
 				}
+			} else {
+				inputs.Reference(payload_chunk);
 			}
-			inputs.SetChildCardinality(end - begin);
+			inputs.SetCardinality(end - begin);
 		}
 
 		//	Aggregate the filtered rows into a single state
 		const auto count = inputs.size();
 		auto state = state_f_data[partition];
-		auto cluster_update = aggr.function.GetStateClusterUpdateCallback();
-		if (cluster_update) {
-			ClusteredAggr clustered;
-			clustered.SetSingleRun(state, count);
-			aggr_input_data.clustered = &clustered;
-			cluster_update(inputs.data.data(), aggr_input_data, inputs.ColumnCount(), clustered, count);
-			aggr_input_data.clustered = nullptr;
+		if (aggr.function.HasStateSimpleUpdateCallback()) {
+			aggr.function.GetStateSimpleUpdateCallback()(inputs.data.data(), aggr_input_data, inputs.ColumnCount(),
+			                                             state, count);
 		} else {
 			state_p_data[0] = state_f_data[partition];
 			aggr.function.GetStateUpdateCallback()(inputs.data.data(), aggr_input_data, inputs.ColumnCount(), statep,

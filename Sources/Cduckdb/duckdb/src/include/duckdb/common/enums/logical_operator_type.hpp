@@ -68,7 +68,6 @@ enum class LogicalOperatorType : uint8_t {
 	LOGICAL_DELETE = 101,
 	LOGICAL_UPDATE = 102,
 	LOGICAL_MERGE_INTO = 103,
-	LOGICAL_TRIGGER = 104,
 
 	// -----------------------------
 	// Schema
@@ -86,7 +85,6 @@ enum class LogicalOperatorType : uint8_t {
 	LOGICAL_CREATE_TYPE = 135,
 	LOGICAL_ATTACH = 136,
 	LOGICAL_DETACH = 137,
-	LOGICAL_CREATE_TRIGGER = 138,
 
 	// -----------------------------
 	// Explain
@@ -104,8 +102,6 @@ enum class LogicalOperatorType : uint8_t {
 	LOGICAL_LOAD = 180,
 	LOGICAL_RESET = 181,
 	LOGICAL_UPDATE_EXTENSIONS = 182,
-	LOGICAL_CONNECT = 183,
-	LOGICAL_DISCONNECT = 184,
 
 	// -----------------------------
 	// Secrets

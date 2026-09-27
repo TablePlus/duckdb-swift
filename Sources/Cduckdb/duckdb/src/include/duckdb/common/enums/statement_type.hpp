@@ -9,10 +9,9 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
-#include "duckdb/common/query_parameters.hpp"
+#include "duckdb/main/query_parameters.hpp"
 #include "duckdb/common/enums/database_modification_type.hpp"
 
 namespace duckdb {
@@ -51,9 +50,7 @@ enum class StatementType : uint8_t {
 	MULTI_STATEMENT,
 	COPY_DATABASE_STATEMENT,
 	UPDATE_EXTENSIONS_STATEMENT,
-	MERGE_INTO_STATEMENT,
-	CONNECT_STATEMENT,
-	DISCONNECT_STATEMENT
+	MERGE_INTO_STATEMENT
 };
 
 DUCKDB_API string StatementTypeToString(StatementType type);
@@ -96,9 +93,9 @@ struct StatementProperties {
 	};
 
 	//! The set of databases this statement will read from
-	identifier_map_t<CatalogIdentity> read_databases;
+	unordered_map<string, CatalogIdentity> read_databases;
 	//! The set of databases this statement will modify
-	identifier_map_t<ModificationInfo> modified_databases;
+	unordered_map<string, ModificationInfo> modified_databases;
 	//! Whether or not the statement requires a valid transaction. Almost all statements require this, with the
 	//! exception of ROLLBACK
 	bool requires_valid_transaction;

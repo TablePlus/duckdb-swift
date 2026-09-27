@@ -8,9 +8,6 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/storage/table/append_state.hpp"
 #include "duckdb/common/types/selection_vector.hpp"
-#include "duckdb/common/types/column/column_data_scan_states.hpp"
-#include "duckdb/storage/table/scan_state.hpp"
-#include "duckdb/common/types/column/column_data_collection.hpp"
 
 namespace duckdb {
 
@@ -18,14 +15,14 @@ namespace duckdb {
 // Bound index
 //-------------------------------------------------------------------------------
 
-BoundIndex::BoundIndex(const Identifier &name, const string &index_type, IndexConstraintType index_constraint_type,
+BoundIndex::BoundIndex(const string &name, const string &index_type, IndexConstraintType index_constraint_type,
                        const vector<column_t> &column_ids, TableIOManager &table_io_manager,
                        const vector<unique_ptr<Expression>> &unbound_expressions_p, AttachedDatabase &db)
     : Index(column_ids, table_io_manager, db), name(name), index_type(index_type),
       index_constraint_type(index_constraint_type) {
 	for (auto &expr : unbound_expressions_p) {
-		types.push_back(expr->GetReturnType().InternalType());
-		logical_types.push_back(expr->GetReturnType());
+		types.push_back(expr->return_type.InternalType());
+		logical_types.push_back(expr->return_type);
 		unbound_expressions.emplace_back(expr->Copy());
 		bound_expressions.push_back(BindExpression(expr->Copy()));
 		executor.AddExpression(*bound_expressions.back());
@@ -150,8 +147,8 @@ void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) {
 unique_ptr<Expression> BoundIndex::BindExpression(unique_ptr<Expression> root_expr) {
 	ExpressionIterator::VisitExpressionMutable<BoundColumnRefExpression>(
 	    root_expr, [&](BoundColumnRefExpression &bound_colref, unique_ptr<Expression> &expr) {
-		    expr = make_uniq<BoundReferenceExpression>(expr->GetReturnType(),
-		                                               column_ids[bound_colref.Binding().column_index]);
+		    expr =
+		        make_uniq<BoundReferenceExpression>(expr->return_type, column_ids[bound_colref.binding.column_index]);
 	    });
 	return root_expr;
 }
@@ -252,6 +249,7 @@ void BoundIndex::ApplyBufferedReplays(const vector<LogicalType> &table_types, Bu
 				table_chunk.data[col_id].Reference(state.current_chunk.data[col_idx]);
 				table_chunk.data[col_id].Slice(sel, rows_to_process);
 			}
+			table_chunk.SetCardinality(rows_to_process);
 			Vector row_ids(state.current_chunk.data.back(), sel, rows_to_process);
 
 			if (replay_range.type == BufferedIndexReplay::INSERT_ENTRY) {

@@ -10,13 +10,11 @@
 
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/storage/index.hpp"
-#include "duckdb/storage/index_storage_info.hpp"
 #include "duckdb/storage/storage_index.hpp"
 
 namespace duckdb {
 
 class ColumnDataCollection;
-class DataChunk;
 
 enum class BufferedIndexReplay : uint8_t { INSERT_ENTRY = 0, DEL_ENTRY = 1 };
 
@@ -88,8 +86,8 @@ public:
 	const string &GetIndexType() const override {
 		return GetCreateInfo().index_type;
 	}
-	const Identifier &GetIndexName() const override {
-		return GetCreateInfo().GetIndexName();
+	const string &GetIndexName() const override {
+		return GetCreateInfo().index_name;
 	}
 	IndexConstraintType GetConstraintType() const override {
 		return GetCreateInfo().constraint_type;
@@ -103,7 +101,7 @@ public:
 	const vector<unique_ptr<ParsedExpression>> &GetParsedExpressions() const {
 		return GetCreateInfo().parsed_expressions;
 	}
-	const Identifier &GetTableName() const {
+	const string &GetTableName() const {
 		return GetCreateInfo().table;
 	}
 

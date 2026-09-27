@@ -6,9 +6,6 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/catalog/catalog_search_path.hpp"
 #include "duckdb/main/settings.hpp"
-#include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
-#include "duckdb/parser/parsed_data/extra_drop_info.hpp"
-#include "duckdb/parser/tableref/basetableref.hpp"
 
 namespace duckdb {
 
@@ -21,29 +18,24 @@ SourceResultType PhysicalDrop::GetDataInternal(ExecutionContext &context, DataCh
 	case CatalogType::PREPARED_STATEMENT: {
 		// DEALLOCATE silently ignores errors
 		auto &statements = ClientData::Get(context.client).prepared_statements;
-		auto stmt_iter = statements.find(info->GetQualifiedName().Name());
+		auto stmt_iter = statements.find(info->name);
 		if (stmt_iter != statements.end()) {
 			statements.erase(stmt_iter);
 		}
 		break;
 	}
 	case CatalogType::SCHEMA_ENTRY: {
-		// the catalog is the leading component of the resolved path ([catalog, parent schemas..., schema])
-		auto &catalog_name = info->GetQualifiedName().Path().front();
-		auto &catalog = Catalog::GetCatalog(context.client, catalog_name);
+		auto &catalog = Catalog::GetCatalog(context.client, info->catalog);
 		catalog.DropEntry(context.client, *info);
 
-		// Check if the dropped schema was set as the current schema. Compare the resolved catalog names: the dropped
-		// schema's catalog is catalog.GetName(); the current default catalog may be empty (= the default database).
+		// Check if the dropped schema was set as the current schema
 		auto &client_data = ClientData::Get(context.client);
 		auto &default_entry = client_data.catalog_search_path->GetDefault();
-		auto &current_catalog = default_entry.GetCatalog();
-		auto &current_schema = default_entry.GetSchema();
-		D_ASSERT(info->GetQualifiedName().Name() != DEFAULT_SCHEMA);
+		auto &current_catalog = default_entry.catalog;
+		auto &current_schema = default_entry.schema;
+		D_ASSERT(info->name != DEFAULT_SCHEMA);
 
-		auto resolved_current_catalog =
-		    IsInvalidCatalog(current_catalog) ? DatabaseManager::GetDefaultDatabase(context.client) : current_catalog;
-		if (catalog.GetName() == resolved_current_catalog && current_schema == info->GetQualifiedName().Name()) {
+		if (info->catalog == current_catalog && current_schema == info->name) {
 			// Reset the schema to default
 			SchemaSetting::SetLocal(context.client, DEFAULT_SCHEMA);
 		}
@@ -54,38 +46,12 @@ SourceResultType PhysicalDrop::GetDataInternal(ExecutionContext &context, DataCh
 		D_ASSERT(info->extra_drop_info);
 		auto &extra_info = info->extra_drop_info->Cast<ExtraDropSecretInfo>();
 		SecretManager::Get(context.client)
-		    .DropSecretByName(context.client, info->GetQualifiedName().Name(), info->if_not_found,
-		                      extra_info.persist_mode, Identifier(extra_info.secret_storage));
-		break;
-	}
-	case CatalogType::TRIGGER_ENTRY: {
-		// Triggers are stored per-table; must be dropped through the table, not the schema
-		if (!info->extra_drop_info) {
-			throw InternalException("DROP TRIGGER: missing extra_drop_info (expected ExtraDropTriggerInfo)");
-		}
-		auto &trigger_extra = info->extra_drop_info->Cast<ExtraDropTriggerInfo>();
-		if (!trigger_extra.base_table) {
-			throw InternalException("DROP TRIGGER: ExtraDropTriggerInfo has no base_table");
-		}
-		auto &base_table_ref = trigger_extra.base_table->Cast<BaseTableRef>();
-		auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context.client, base_table_ref.GetQualifiedName());
-		auto &duck_table = table_entry.Cast<DuckTableEntry>();
-		auto transaction = duck_table.catalog.GetCatalogTransaction(context.client);
-		if (!duck_table.DropTrigger(transaction, info->GetQualifiedName().Name(), info->cascade)) {
-			if (info->if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
-				throw CatalogException("Trigger with name \"%s\" does not exist on table \"%s\"",
-				                       info->GetQualifiedName().Name(), base_table_ref.Table());
-			}
-		}
+		    .DropSecretByName(context.client, info->name, info->if_not_found, extra_info.persist_mode,
+		                      extra_info.secret_storage);
 		break;
 	}
 	default: {
-		// for a nested target the path is [catalog, schema_path..., name] and .Catalog() is empty, so read the catalog
-		// from the leading component; otherwise use .Catalog() (which may be empty -> the default catalog, e.g. for an
-		// unresolved DROP ... IF EXISTS of a missing entry)
-		auto &qname = info->GetQualifiedName();
-		auto &catalog_name = qname.Path().size() > 3 ? qname.Path().front() : qname.Catalog();
-		auto &catalog = Catalog::GetCatalog(context.client, catalog_name);
+		auto &catalog = Catalog::GetCatalog(context.client, info->catalog);
 		catalog.DropEntry(context.client, *info);
 		break;
 	}

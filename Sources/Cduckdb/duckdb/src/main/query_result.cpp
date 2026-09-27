@@ -69,27 +69,25 @@ QueryResult::~QueryResult() {
 }
 
 void QueryResult::DeduplicateColumns(vector<string> &names) {
-	auto identifiers = StringsToIdentifiers(names);
-	DeduplicateColumns(identifiers);
-	names = IdentifiersToStrings(identifiers);
-}
-
-void QueryResult::DeduplicateColumns(vector<Identifier> &names) {
-	identifier_map_t<idx_t> name_map;
+	unordered_map<string, idx_t> name_map;
 	for (auto &column_name : names) {
-		if (name_map.find(column_name) == name_map.end()) {
+		// put it all lower_case
+		auto low_column_name = StringUtil::Lower(column_name);
+		if (name_map.find(low_column_name) == name_map.end()) {
 			// Name does not exist yet
-			name_map[column_name]++;
+			name_map[low_column_name]++;
 		} else {
 			// Name already exists, we add _x where x is the repetition number
-			Identifier new_column_name(column_name + "_" + std::to_string(name_map[column_name]));
-			while (name_map.find(new_column_name) != name_map.end()) {
+			string new_column_name = column_name + "_" + std::to_string(name_map[low_column_name]);
+			auto new_column_name_low = StringUtil::Lower(new_column_name);
+			while (name_map.find(new_column_name_low) != name_map.end()) {
 				// This name is already here due to a previous definition
-				name_map[column_name]++;
-				new_column_name = Identifier(column_name + "_" + std::to_string(name_map[column_name]));
+				name_map[low_column_name]++;
+				new_column_name = column_name + "_" + std::to_string(name_map[low_column_name]);
+				new_column_name_low = StringUtil::Lower(new_column_name);
 			}
 			column_name = new_column_name;
-			name_map[new_column_name]++;
+			name_map[new_column_name_low]++;
 		}
 	}
 }
@@ -99,7 +97,7 @@ const string &QueryResult::ColumnName(idx_t index) const {
 	return names[index];
 }
 
-string QueryResult::ToBox(BoxRendererContext &context, const BoxRendererConfig &config) {
+string QueryResult::ToBox(ClientContext &context, const BoxRendererConfig &config) {
 	return ToString();
 }
 

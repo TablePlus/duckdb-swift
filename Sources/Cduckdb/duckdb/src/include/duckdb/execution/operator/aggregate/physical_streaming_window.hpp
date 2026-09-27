@@ -10,7 +10,6 @@
 
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/planner/expression.hpp"
-#include "duckdb/planner/expression/bound_window_expression.hpp"
 
 namespace duckdb {
 
@@ -19,7 +18,7 @@ class PhysicalStreamingWindow : public PhysicalOperator {
 public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::STREAMING_WINDOW;
 
-	static bool IsStreamingFunction(ClientContext &context, BoundWindowExpression &wexpr);
+	static bool IsStreamingFunction(ClientContext &context, unique_ptr<Expression> &expr);
 
 public:
 	PhysicalStreamingWindow(PhysicalPlan &physical_plan, vector<LogicalType> types,

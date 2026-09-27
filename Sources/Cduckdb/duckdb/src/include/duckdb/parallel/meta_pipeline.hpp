@@ -18,10 +18,6 @@ enum class MetaPipelineType : uint8_t {
 	JOIN_BUILD = 1 //! The shared sink is a join build
 };
 
-enum class MetaPipelineDependencyMode : uint8_t { ADD_DEPENDENCY, NO_DEPENDENCY };
-enum class RecursiveDependencyMode : uint8_t { RESPECT_PARALLELISM, FORCE };
-enum class DataflowDependencyMode : uint8_t { INCLUDE, SKIP };
-
 //! MetaPipeline represents a set of pipelines that all have the same sink
 class MetaPipeline : public enable_shared_from_this<MetaPipeline> {
 	//! We follow these rules when building:
@@ -69,20 +65,14 @@ public:
 	//! Let 'dependant' depend on all pipeline that were created since 'start',
 	//! where 'including' determines whether 'start' is added to the dependencies
 	vector<shared_ptr<Pipeline>> AddDependenciesFrom(Pipeline &dependant, const Pipeline &start, bool including);
-	//! Recursively makes all children of this MetaPipeline depend on the given Pipeline.
-	//! Force dependencies when ordering is mandatory, rather than using the pipeline/thread-count heuristic.
-	void
-	AddRecursiveDependencies(const vector<shared_ptr<Pipeline>> &new_dependencies, const MetaPipeline &last_child,
-	                         RecursiveDependencyMode dependency_mode = RecursiveDependencyMode::RESPECT_PARALLELISM,
-	                         DataflowDependencyMode dataflow_mode = DataflowDependencyMode::INCLUDE);
+	//! Recursively makes all children of this MetaPipeline depend on the given Pipeline
+	void AddRecursiveDependencies(const vector<shared_ptr<Pipeline>> &new_dependencies, const MetaPipeline &last_child);
 	//! Make sure that the given pipeline has its own PipelineFinishEvent (e.g., for IEJoin - double Finalize)
 	void AddFinishEvent(Pipeline &pipeline);
 	//! Whether the pipeline needs its own PipelineFinishEvent
 	bool HasFinishEvent(Pipeline &pipeline) const;
 	//! Whether this pipeline is part of a PipelineFinishEvent
 	optional_ptr<Pipeline> GetFinishGroup(Pipeline &pipeline) const;
-	//! Get the child MetaPipelines
-	const vector<shared_ptr<MetaPipeline>> &GetChildren() const;
 
 public:
 	//! Build the MetaPipeline with 'op' as the first operator (excl. the shared sink)
@@ -98,9 +88,8 @@ public:
 	//! where 'last_pipeline' is the last pipeline added before building out 'current'
 	void CreateChildPipeline(Pipeline &current, PhysicalOperator &op, Pipeline &last_pipeline);
 	//! Create a MetaPipeline child that 'current' depends on
-	MetaPipeline &
-	CreateChildMetaPipeline(Pipeline &current, PhysicalOperator &op, MetaPipelineType type = MetaPipelineType::REGULAR,
-	                        MetaPipelineDependencyMode dependency_mode = MetaPipelineDependencyMode::ADD_DEPENDENCY);
+	MetaPipeline &CreateChildMetaPipeline(Pipeline &current, PhysicalOperator &op,
+	                                      MetaPipelineType type = MetaPipelineType::REGULAR);
 
 private:
 	//! The executor for all MetaPipelines in the query plan

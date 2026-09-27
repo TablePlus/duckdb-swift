@@ -24,9 +24,8 @@ struct FunctionDataWrapper {
 };
 
 struct AggregateObject { // NOLINT: work-around bug in clang-tidy
-	AggregateObject(BoundAggregateFunction function, FunctionData *bind_data, idx_t child_count, idx_t payload_size,
-	                AggregateType aggr_type, PhysicalType return_type, optional_ptr<const Expression> filter = nullptr);
-	explicit AggregateObject(BoundAggregateExpression &aggr);
+	AggregateObject(AggregateFunction function, FunctionData *bind_data, idx_t child_count, idx_t payload_size,
+	                AggregateType aggr_type, PhysicalType return_type, Expression *filter = nullptr);
 	explicit AggregateObject(BoundAggregateExpression *aggr);
 	explicit AggregateObject(const BoundWindowExpression &window);
 
@@ -34,13 +33,13 @@ struct AggregateObject { // NOLINT: work-around bug in clang-tidy
 		return bind_data_wrapper ? bind_data_wrapper->function_data.get() : nullptr;
 	}
 
-	BoundAggregateFunction function;
+	AggregateFunction function;
 	shared_ptr<FunctionDataWrapper> bind_data_wrapper;
 	idx_t child_count;
 	idx_t payload_size;
 	AggregateType aggr_type;
 	PhysicalType return_type;
-	optional_ptr<const Expression> filter = nullptr;
+	Expression *filter = nullptr;
 
 public:
 	bool IsDistinct() const {
@@ -50,8 +49,7 @@ public:
 };
 
 struct AggregateFilterData {
-	AggregateFilterData(ClientContext &context, const Expression &filter_expr,
-	                    const vector<LogicalType> &payload_types);
+	AggregateFilterData(ClientContext &context, Expression &filter_expr, const vector<LogicalType> &payload_types);
 
 	idx_t ApplyFilter(DataChunk &payload);
 

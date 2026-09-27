@@ -24,13 +24,12 @@ public:
 	                       idx_t estimated_cardinality, optionally_owned_ptr<ColumnDataCollection> collection);
 
 	PhysicalColumnDataScan(PhysicalPlan &physical_plan, vector<LogicalType> types, PhysicalOperatorType op_type,
-	                       idx_t estimated_cardinality, TableIndex cte_index);
+	                       idx_t estimated_cardinality, idx_t cte_index);
 
 	//! (optionally owned) column data collection to scan
 	optionally_owned_ptr<ColumnDataCollection> collection;
-	optional_ptr<PhysicalOperator> cte_source;
 
-	TableIndex cte_index;
+	idx_t cte_index;
 	optional_idx delim_index;
 
 public:
@@ -39,7 +38,6 @@ public:
 	                                                 GlobalSourceState &gstate) const override;
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override;
-	ProgressData GetProgress(ClientContext &context, GlobalSourceState &gstate) const override;
 
 	bool IsSource() const override {
 		return true;

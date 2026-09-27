@@ -47,7 +47,7 @@ void WindowIndexTreeLocalState::BuildLeaves() {
 		if (count == 0) {
 			break;
 		}
-		const auto &indices = payload_chunk.data[0];
+		auto &indices = payload_chunk.data[0];
 		if (window_tree.mst32) {
 			auto &sorted = window_tree.mst32->LowestLevel();
 			auto data = FlatVector::GetData<int32_t>(indices);

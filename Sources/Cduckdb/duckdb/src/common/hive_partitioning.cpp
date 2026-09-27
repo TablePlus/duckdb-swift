@@ -8,7 +8,6 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
 
 namespace duckdb {
 
@@ -22,9 +21,9 @@ struct PartitioningColumnValue {
 	string value;
 };
 
-static unordered_map<ProjectionIndex, PartitioningColumnValue>
+static unordered_map<column_t, PartitioningColumnValue>
 GetKnownColumnValues(const string &filename, const HivePartitioningFilterInfo &filter_info) {
-	unordered_map<ProjectionIndex, PartitioningColumnValue> result;
+	unordered_map<column_t, PartitioningColumnValue> result;
 
 	auto &column_map = filter_info.column_map;
 	if (filter_info.filename_enabled) {
@@ -49,19 +48,18 @@ GetKnownColumnValues(const string &filename, const HivePartitioningFilterInfo &f
 }
 
 // Takes an expression and converts a list of known column_refs to constants
-static void
-ConvertKnownColRefToConstants(ClientContext &context, unique_ptr<Expression> &expr,
-                              const unordered_map<ProjectionIndex, PartitioningColumnValue> &known_column_values,
-                              TableIndex table_index) {
+static void ConvertKnownColRefToConstants(ClientContext &context, unique_ptr<Expression> &expr,
+                                          const unordered_map<column_t, PartitioningColumnValue> &known_column_values,
+                                          idx_t table_index) {
 	if (expr->GetExpressionType() == ExpressionType::BOUND_COLUMN_REF) {
 		auto &bound_colref = expr->Cast<BoundColumnRefExpression>();
 
 		// This bound column ref is for another table
-		if (table_index != bound_colref.Binding().table_index) {
+		if (table_index != bound_colref.binding.table_index) {
 			return;
 		}
 
-		auto lookup = known_column_values.find(bound_colref.Binding().column_index);
+		auto lookup = known_column_values.find(bound_colref.binding.column_index);
 		if (lookup != known_column_values.end()) {
 			auto &partition_val = lookup->second;
 			Value result_val;
@@ -71,7 +69,7 @@ ConvertKnownColRefToConstants(ClientContext &context, unique_ptr<Expression> &ex
 			} else {
 				// hive partitioning column - cast the value to the target type
 				result_val = HivePartitioning::GetValue(context, partition_val.key, partition_val.value,
-				                                        bound_colref.GetReturnType());
+				                                        bound_colref.return_type);
 			}
 			expr = make_uniq<BoundConstantExpression>(std::move(result_val));
 		}
@@ -239,79 +237,88 @@ static inline Value GetHiveKeyNullValue(const LogicalType &type) {
 }
 
 template <class T>
-static void TemplatedGetHivePartitionValues(const Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx) {
-	auto entries = input.Values<T>();
+static void TemplatedGetHivePartitionValues(Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx,
+                                            const idx_t count) {
+	UnifiedVectorFormat format;
+	input.ToUnifiedFormat(count, format);
+
+	const auto &sel = *format.sel;
+	const auto data = UnifiedVectorFormat::GetData<T>(format);
+	const auto &validity = format.validity;
+
 	const auto &type = input.GetType();
 
-	for (idx_t i = 0; i < input.size(); i++) {
+	for (idx_t i = 0; i < count; i++) {
 		auto &key = keys[i];
-		auto entry = entries[i];
-		if (entry.IsValid()) {
-			key.values[col_idx] = GetHiveKeyValue(entry.GetValue(), type);
+		const auto idx = sel.get_index(i);
+		if (validity.RowIsValid(idx)) {
+			key.values[col_idx] = GetHiveKeyValue(data[idx], type);
 		} else {
 			key.values[col_idx] = GetHiveKeyNullValue(type);
 		}
 	}
 }
 
-static void GetNestedHivePartitionValues(const Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx) {
-	for (idx_t i = 0; i < input.size(); i++) {
+static void GetNestedHivePartitionValues(Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx,
+                                         const idx_t count) {
+	for (idx_t i = 0; i < count; i++) {
 		auto &key = keys[i];
 		key.values[col_idx] = input.GetValue(i);
 	}
 }
 
-static void GetHivePartitionValuesTypeSwitch(const Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx) {
+static void GetHivePartitionValuesTypeSwitch(Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx,
+                                             const idx_t count) {
 	const auto &type = input.GetType();
 	switch (type.InternalType()) {
 	case PhysicalType::BOOL:
-		TemplatedGetHivePartitionValues<bool>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<bool>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::INT8:
-		TemplatedGetHivePartitionValues<int8_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<int8_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::INT16:
-		TemplatedGetHivePartitionValues<int16_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<int16_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::INT32:
-		TemplatedGetHivePartitionValues<int32_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<int32_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::INT64:
-		TemplatedGetHivePartitionValues<int64_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<int64_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::INT128:
-		TemplatedGetHivePartitionValues<hugeint_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<hugeint_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::UINT8:
-		TemplatedGetHivePartitionValues<uint8_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<uint8_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::UINT16:
-		TemplatedGetHivePartitionValues<uint16_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<uint16_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::UINT32:
-		TemplatedGetHivePartitionValues<uint32_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<uint32_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::UINT64:
-		TemplatedGetHivePartitionValues<uint64_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<uint64_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::UINT128:
-		TemplatedGetHivePartitionValues<uhugeint_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<uhugeint_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::FLOAT:
-		TemplatedGetHivePartitionValues<float>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<float>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::DOUBLE:
-		TemplatedGetHivePartitionValues<double>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<double>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::INTERVAL:
-		TemplatedGetHivePartitionValues<interval_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<interval_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::VARCHAR:
-		TemplatedGetHivePartitionValues<string_t>(input, keys, col_idx);
+		TemplatedGetHivePartitionValues<string_t>(input, keys, col_idx, count);
 		break;
 	case PhysicalType::STRUCT:
 	case PhysicalType::LIST:
-		GetNestedHivePartitionValues(input, keys, col_idx);
+		GetNestedHivePartitionValues(input, keys, col_idx, count);
 		break;
 	default:
 		throw InternalException("Unsupported type for HivePartitionedColumnData::ComputePartitionIndices");
@@ -322,24 +329,24 @@ void HivePartitionedColumnData::ComputePartitionIndices(PartitionedColumnDataApp
 	const auto count = input.size();
 
 	input.Hash(group_by_columns, hashes_v);
-	hashes_v.Flatten();
+	hashes_v.Flatten(count);
 
 	for (idx_t col_idx = 0; col_idx < group_by_columns.size(); col_idx++) {
-		const auto &group_by_col = input.data[group_by_columns[col_idx]];
-		GetHivePartitionValuesTypeSwitch(group_by_col, keys, col_idx);
+		auto &group_by_col = input.data[group_by_columns[col_idx]];
+		GetHivePartitionValuesTypeSwitch(group_by_col, keys, col_idx, count);
 	}
 
 	const auto hashes = FlatVector::GetData<hash_t>(hashes_v);
-	auto partition_indices = FlatVector::Writer<idx_t>(state.partition_indices, count);
+	const auto partition_indices = FlatVector::GetData<idx_t>(state.partition_indices);
 	for (idx_t i = 0; i < count; i++) {
 		auto &key = keys[i];
 		key.hash = hashes[i];
 		auto lookup = local_partition_map.find(key);
 		if (lookup == local_partition_map.end()) {
 			idx_t new_partition_id = RegisterNewPartition(key, state);
-			partition_indices.WriteValue(new_partition_id);
+			partition_indices[i] = new_partition_id;
 		} else {
-			partition_indices.WriteValue(lookup->second);
+			partition_indices[i] = lookup->second;
 		}
 	}
 }

@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/named_parameter_map.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
@@ -20,28 +19,27 @@ class BaseSecret;
 struct SecretEntry;
 struct FileOpenerInfo;
 struct CreateSecretInfo;
-class FileOpener;
 
-//! The lifetime of a secret
-enum class SecretPersistType : uint8_t { DEFAULT, TEMPORARY, PERSISTENT, TRANSACTION };
+//! Whether a secret is persistent or temporary
+enum class SecretPersistType : uint8_t { DEFAULT, TEMPORARY, PERSISTENT };
 
 //! Input passed to a CreateSecretFunction
 struct CreateSecretInput {
 	//! type
-	Identifier type;
+	string type;
 	//! mode
-	Identifier provider;
+	string provider;
 	//! should the secret be persisted?
-	Identifier storage_type;
+	string storage_type;
 	//! (optional) alias provided by user
-	Identifier name;
+	string name;
 	//! (optional) scope provided by user
 	vector<string> scope;
 	//! (optional) named parameter map, each create secret function has defined it's own set of these
 	case_insensitive_map_t<Value> options;
 	//! how to handle conflicts
 	OnCreateConflict on_conflict;
-	//! lifetime of the secret
+	//! persistence of secret
 	SecretPersistType persist_type;
 };
 
@@ -52,7 +50,7 @@ typedef unique_ptr<BaseSecret> (*create_secret_function_t)(ClientContext &contex
 class CreateSecretFunction {
 public:
 	string secret_type;
-	Identifier provider;
+	string provider;
 	create_secret_function_t function;
 	named_parameter_type_map_t named_parameters;
 };
@@ -64,15 +62,15 @@ public:
 	explicit CreateSecretFunctionSet(string &name) : name(name) {};
 
 public:
-	bool ProviderExists(const Identifier &provider_name);
+	bool ProviderExists(const string &provider_name);
 	void AddFunction(CreateSecretFunction &function, OnCreateConflict on_conflict);
 	CreateSecretFunction &GetFunction(const string &provider);
 
 protected:
 	//! Create Secret Function type name
-	Identifier name;
+	string name;
 	//! Maps of provider -> function
-	identifier_map_t<CreateSecretFunction> functions;
+	case_insensitive_map_t<CreateSecretFunction> functions;
 };
 
 //! Determines whether the secrets are allowed to be shown
@@ -81,7 +79,7 @@ enum class SecretDisplayType : uint8_t { REDACTED, UNREDACTED };
 //! Secret types contain the base settings of a secret
 struct SecretType {
 	//! Unique name identifying the secret type
-	Identifier name;
+	string name;
 	//! The deserialization function for the type
 	secret_deserializer_t deserializer;
 	//! Provider to use when non is specified
@@ -102,7 +100,7 @@ class BaseSecret {
 	friend class SecretManager;
 
 public:
-	BaseSecret(vector<string> prefix_paths_p, Identifier type_p, Identifier provider_p, Identifier name_p)
+	BaseSecret(vector<string> prefix_paths_p, string type_p, string provider_p, string name_p)
 	    : prefix_paths(std::move(prefix_paths_p)), type(std::move(type_p)), provider(std::move(provider_p)),
 	      name(std::move(name_p)), serializable(false) {
 		D_ASSERT(!type.empty());
@@ -131,13 +129,13 @@ public:
 	const vector<string> &GetScope() const {
 		return prefix_paths;
 	}
-	const Identifier &GetType() const {
+	const string &GetType() const {
 		return type;
 	}
-	const Identifier &GetProvider() const {
+	const string &GetProvider() const {
 		return provider;
 	}
-	const Identifier &GetName() const {
+	const string &GetName() const {
 		return name;
 	}
 	bool IsSerializable() const {
@@ -152,11 +150,11 @@ protected:
 	vector<string> prefix_paths;
 
 	//! Type of secret
-	Identifier type;
+	string type;
 	//! Provider of the secret
-	Identifier provider;
+	string provider;
 	//! Name of the secret
-	Identifier name;
+	string name;
 	//! Whether the secret can be serialized/deserialized
 	bool serializable;
 };
@@ -165,8 +163,7 @@ protected:
 //! for most use-cases of secrets as secrets generally tend to fit in a key value map.
 class KeyValueSecret : public BaseSecret {
 public:
-	KeyValueSecret(const vector<string> &prefix_paths, const Identifier &type, const Identifier &provider,
-	               const Identifier &name)
+	KeyValueSecret(const vector<string> &prefix_paths, const string &type, const string &provider, const string &name)
 	    : BaseSecret(prefix_paths, type, provider, name) {
 		D_ASSERT(!type.empty());
 		serializable = true;
@@ -194,7 +191,7 @@ public:
 	void Serialize(Serializer &serializer) const override;
 
 	//! Tries to get the value at key <key>, depending on error_on_missing will throw or return Value()
-	Value TryGetValue(const Identifier &key, bool error_on_missing = false) const;
+	Value TryGetValue(const string &key, bool error_on_missing = false) const;
 
 	// FIXME: use serialization scripts
 	template <class TYPE>
@@ -205,13 +202,13 @@ public:
 
 		for (const auto &entry : ListValue::GetChildren(secret_map_value)) {
 			auto kv_struct = StructValue::GetChildren(entry);
-			result->secret_map[Identifier(kv_struct[0].ToString())] = kv_struct[1];
+			result->secret_map[kv_struct[0].ToString()] = kv_struct[1];
 		}
 
 		Value redact_set_value;
 		deserializer.ReadProperty(202, "redact_keys", redact_set_value);
 		for (const auto &entry : ListValue::GetChildren(redact_set_value)) {
-			result->redact_keys.insert(Identifier(entry.ToString()));
+			result->redact_keys.insert(entry.ToString());
 		}
 
 		return duckdb::unique_ptr_cast<TYPE, BaseSecret>(std::move(result));
@@ -222,7 +219,7 @@ public:
 	}
 
 	// Get a value from the secret
-	bool TryGetValue(const Identifier &key, Value &result) const {
+	bool TryGetValue(const string &key, Value &result) const {
 		auto lookup = secret_map.find(key);
 		if (lookup == secret_map.end()) {
 			return false;
@@ -231,8 +228,8 @@ public:
 		return true;
 	}
 
-	bool TrySetValue(const Identifier &key, const CreateSecretInput &input) {
-		auto lookup = input.options.find(key.GetIdentifierName());
+	bool TrySetValue(const string &key, const CreateSecretInput &input) {
+		auto lookup = input.options.find(key);
 		if (lookup != input.options.end()) {
 			secret_map[key] = lookup->second;
 			return true;
@@ -241,9 +238,9 @@ public:
 	}
 
 	//! the map of key -> values that make up the secret
-	identifier_tree_t<Value> secret_map;
+	case_insensitive_tree_t<Value> secret_map;
 	//! keys that are sensitive and should be redacted
-	identifier_set_t redact_keys;
+	case_insensitive_set_t redact_keys;
 };
 
 // Helper class to fetch secret parameters in a cascading way. The idea being that in many cases there is a direct

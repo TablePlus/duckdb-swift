@@ -1,9 +1,4 @@
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/main/client_context.hpp"
-#include "duckdb/common/vector/map_vector.hpp"
-#include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/sorting/sorted_run.hpp"
-#include "duckdb/common/enums/memory_tag.hpp"
 
 #include "duckdb/common/types/row/tuple_data_collection.hpp"
 #include "duckdb/common/sorting/sort.hpp"
@@ -21,30 +16,31 @@ namespace duckdb {
 SortedRunScanState::SortedRunScanState(ClientContext &context, const Sort &sort_p)
     : sort(sort_p), key_executor(context, *sort.decode_sort_key) {
 	key.Initialize(context, {sort.key_layout->GetTypes()[0]});
-	decoded_key.Initialize(context, {sort.decode_sort_key->GetReturnType()});
+	decoded_key.Initialize(context, {sort.decode_sort_key->return_type});
 }
 
-void SortedRunScanState::Scan(const SortedRun &sorted_run, const Vector &sort_key_pointers, DataChunk &chunk) {
+void SortedRunScanState::Scan(const SortedRun &sorted_run, const Vector &sort_key_pointers, const idx_t &count,
+                              DataChunk &chunk) {
 	const auto sort_key_type = sort.key_layout->GetSortKeyType();
 	switch (sort_key_type) {
 	case SortKeyType::NO_PAYLOAD_FIXED_8:
-		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_8>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_8>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::NO_PAYLOAD_FIXED_16:
-		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_16>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_16>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::NO_PAYLOAD_FIXED_24:
-		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_24>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_24>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::NO_PAYLOAD_FIXED_32:
-		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_32>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::NO_PAYLOAD_FIXED_32>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::NO_PAYLOAD_VARIABLE_32:
-		return TemplatedScan<SortKeyType::NO_PAYLOAD_VARIABLE_32>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::NO_PAYLOAD_VARIABLE_32>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::PAYLOAD_FIXED_16:
-		return TemplatedScan<SortKeyType::PAYLOAD_FIXED_16>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::PAYLOAD_FIXED_16>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::PAYLOAD_FIXED_24:
-		return TemplatedScan<SortKeyType::PAYLOAD_FIXED_24>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::PAYLOAD_FIXED_24>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::PAYLOAD_FIXED_32:
-		return TemplatedScan<SortKeyType::PAYLOAD_FIXED_32>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::PAYLOAD_FIXED_32>(sorted_run, sort_key_pointers, count, chunk);
 	case SortKeyType::PAYLOAD_VARIABLE_32:
-		return TemplatedScan<SortKeyType::PAYLOAD_VARIABLE_32>(sorted_run, sort_key_pointers, chunk);
+		return TemplatedScan<SortKeyType::PAYLOAD_VARIABLE_32>(sorted_run, sort_key_pointers, count, chunk);
 	default:
 		throw NotImplementedException("SortedRunMergerLocalState::ScanPartition for %s",
 		                              EnumUtil::ToString(sort_key_type));
@@ -57,9 +53,9 @@ void SortedRunScanState::Clear() {
 }
 
 template <class SORT_KEY, class PHYSICAL_TYPE>
-static void TemplatedGetKeyAndPayload(SORT_KEY *const *const sort_keys, SORT_KEY *temp_keys, const idx_t &count,
-                                      DataChunk &key, data_ptr_t *const payload_ptrs) {
-	const auto key_data = FlatVector::GetDataMutable<PHYSICAL_TYPE>(key.data[0]);
+void TemplatedGetKeyAndPayload(SORT_KEY *const *const sort_keys, SORT_KEY *temp_keys, const idx_t &count,
+                               DataChunk &key, data_ptr_t *const payload_ptrs) {
+	const auto key_data = FlatVector::GetData<PHYSICAL_TYPE>(key.data[0]);
 	for (idx_t i = 0; i < count; i++) {
 		auto &sort_key = temp_keys[i];
 		sort_key = *sort_keys[i];
@@ -68,12 +64,12 @@ static void TemplatedGetKeyAndPayload(SORT_KEY *const *const sort_keys, SORT_KEY
 			payload_ptrs[i] = sort_key.GetPayload();
 		}
 	}
-	key.SetChildCardinality(count);
+	key.SetCardinality(count);
 }
 
 template <class SORT_KEY>
-static void GetKeyAndPayload(SORT_KEY *const *const sort_keys, SORT_KEY *temp_keys, const idx_t &count, DataChunk &key,
-                             data_ptr_t *const payload_ptrs) {
+void GetKeyAndPayload(SORT_KEY *const *const sort_keys, SORT_KEY *temp_keys, const idx_t &count, DataChunk &key,
+                      data_ptr_t *const payload_ptrs) {
 	const auto type_id = key.data[0].GetType().id();
 	switch (type_id) {
 	case LogicalTypeId::BLOB:
@@ -86,15 +82,15 @@ static void GetKeyAndPayload(SORT_KEY *const *const sort_keys, SORT_KEY *temp_ke
 }
 
 template <SortKeyType SORT_KEY_TYPE>
-void SortedRunScanState::TemplatedScan(const SortedRun &sorted_run, const Vector &sort_key_pointers, DataChunk &chunk) {
+void SortedRunScanState::TemplatedScan(const SortedRun &sorted_run, const Vector &sort_key_pointers, const idx_t &count,
+                                       DataChunk &chunk) {
 	using SORT_KEY = SortKey<SORT_KEY_TYPE>;
-	const idx_t count = sort_key_pointers.size();
 
 	const auto &output_projection_columns = sort.output_projection_columns;
 	idx_t opc_idx = 0;
 
 	const auto sort_keys = FlatVector::GetData<SORT_KEY *const>(sort_key_pointers);
-	const auto payload_ptrs = FlatVector::GetDataMutable<data_ptr_t>(payload_state.chunk_state.row_locations);
+	const auto payload_ptrs = FlatVector::GetData<data_ptr_t>(payload_state.chunk_state.row_locations);
 	bool gathered_payload = false;
 
 	// Decode from key
@@ -113,7 +109,7 @@ void SortedRunScanState::TemplatedScan(const SortedRun &sorted_run, const Vector
 			if (opc.is_payload) {
 				break;
 			}
-			chunk.data[opc.output_col_idx].Reference(decoded_key_entries[opc.layout_col_idx]);
+			chunk.data[opc.output_col_idx].Reference(*decoded_key_entries[opc.layout_col_idx]);
 		}
 
 		gathered_payload = true;
@@ -146,7 +142,7 @@ void SortedRunScanState::TemplatedScan(const SortedRun &sorted_run, const Vector
 		}
 	}
 
-	chunk.SetChildCardinality(count);
+	chunk.SetCardinality(count);
 }
 
 //===--------------------------------------------------------------------===//
@@ -177,29 +173,28 @@ SortedRun::~SortedRun() {
 }
 
 template <SortKeyType SORT_KEY_TYPE>
-static void TemplatedSetPayloadPointer(const Vector &key_locations, const Vector &payload_locations) {
+static void TemplatedSetPayloadPointer(Vector &key_locations, Vector &payload_locations, const idx_t count) {
 	using SORT_KEY = SortKey<SORT_KEY_TYPE>;
-	D_ASSERT(key_locations.size() == payload_locations.size());
 
 	const auto key_locations_ptr = FlatVector::GetData<SORT_KEY *>(key_locations);
 	const auto payload_locations_ptr = FlatVector::GetData<data_ptr_t>(payload_locations);
 
-	for (idx_t i = 0; i < key_locations.size(); i++) {
+	for (idx_t i = 0; i < count; i++) {
 		key_locations_ptr[i]->SetPayload(payload_locations_ptr[i]);
 	}
 }
 
-static void SetPayloadPointer(const Vector &key_locations, const Vector &payload_locations,
+static void SetPayloadPointer(Vector &key_locations, Vector &payload_locations, const idx_t count,
                               const SortKeyType &sort_key_type) {
 	switch (sort_key_type) {
 	case SortKeyType::PAYLOAD_FIXED_16:
-		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_FIXED_16>(key_locations, payload_locations);
+		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_FIXED_16>(key_locations, payload_locations, count);
 	case SortKeyType::PAYLOAD_FIXED_24:
-		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_FIXED_24>(key_locations, payload_locations);
+		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_FIXED_24>(key_locations, payload_locations, count);
 	case SortKeyType::PAYLOAD_FIXED_32:
-		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_FIXED_32>(key_locations, payload_locations);
+		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_FIXED_32>(key_locations, payload_locations, count);
 	case SortKeyType::PAYLOAD_VARIABLE_32:
-		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_VARIABLE_32>(key_locations, payload_locations);
+		return TemplatedSetPayloadPointer<SortKeyType::PAYLOAD_VARIABLE_32>(key_locations, payload_locations, count);
 	default:
 		throw NotImplementedException("SetPayloadPointer for %s", EnumUtil::ToString(sort_key_type));
 	}
@@ -212,7 +207,7 @@ void SortedRun::Sink(DataChunk &key, DataChunk &payload) {
 		D_ASSERT(key.size() == payload.size());
 		payload_data->Append(payload_append_state, payload);
 		SetPayloadPointer(key_append_state.chunk_state.row_locations, payload_append_state.chunk_state.row_locations,
-		                  key_data->GetLayout().GetSortKeyType());
+		                  key.size(), key_data->GetLayout().GetSortKeyType());
 	}
 }
 
@@ -220,9 +215,9 @@ template <class SORT_KEY>
 struct SkaExtractKey {
 	using result_type = uint64_t;
 	SkaExtractKey(bool requires_next_sort_p, idx_t ska_sort_width_p, const vector<idx_t> &sort_skippable_bytes_p,
-	              atomic<ClientInterruptState> &interrupt_state_p)
+	              atomic<bool> &interrupted_p)
 	    : requires_next_sort(requires_next_sort_p), ska_sort_width(ska_sort_width_p),
-	      sort_skippable_bytes(sort_skippable_bytes_p), interrupt_state(interrupt_state_p) {
+	      sort_skippable_bytes(sort_skippable_bytes_p), interrupted(interrupted_p) {
 	}
 
 	const result_type &operator()(const SORT_KEY &key) const {
@@ -235,17 +230,17 @@ struct SkaExtractKey {
 	}
 
 	bool Interrupted() const {
-		return interrupt_state.load(std::memory_order_relaxed) == ClientInterruptState::INTERRUPTED;
+		return interrupted.load(std::memory_order_relaxed);
 	}
 
 	bool requires_next_sort;
 	idx_t ska_sort_width;
 	const vector<idx_t> &sort_skippable_bytes;
-	atomic<ClientInterruptState> &interrupt_state;
+	atomic<bool> &interrupted;
 };
 
 template <SortKeyType SORT_KEY_TYPE>
-static void TemplatedSort(ClientContext &context, TupleDataCollection &key_data, const bool is_index_sort) {
+static void TemplatedSort(ClientContext &context, const TupleDataCollection &key_data, const bool is_index_sort) {
 	const auto &layout = key_data.GetLayout();
 	D_ASSERT(SORT_KEY_TYPE == layout.GetSortKeyType());
 	using SORT_KEY = SortKey<SORT_KEY_TYPE>;
@@ -261,17 +256,19 @@ static void TemplatedSort(ClientContext &context, TupleDataCollection &key_data,
 	const auto ska_sort_width = MinValue<idx_t>(layout.GetSortWidth(), sizeof(uint64_t));
 	const auto &sort_skippable_bytes = layout.GetSortSkippableBytes();
 	auto ska_extract_key =
-	    SkaExtractKey<SORT_KEY>(requires_next_sort, ska_sort_width, sort_skippable_bytes, context.interrupt_state);
+	    SkaExtractKey<SORT_KEY>(requires_next_sort, ska_sort_width, sort_skippable_bytes, context.interrupted);
 
 	const auto fallback = [ska_extract_key](const BLOCK_ITERATOR &fb_begin, const BLOCK_ITERATOR &fb_end) {
 		duckdb_ska_sort::ska_sort(fb_begin, fb_end, ska_extract_key);
 	};
 	duckdb_vergesort::vergesort(begin, end, std::less<SORT_KEY>(), fallback);
 
-	context.InterruptCheck();
+	if (context.interrupted.load(std::memory_order_relaxed)) {
+		throw InterruptException();
+	}
 }
 
-static void SortSwitch(ClientContext &context, TupleDataCollection &key_data, bool is_index_sort) {
+static void SortSwitch(ClientContext &context, const TupleDataCollection &key_data, bool is_index_sort) {
 	const auto sort_key_type = key_data.GetLayout().GetSortKeyType();
 	switch (sort_key_type) {
 	case SortKeyType::NO_PAYLOAD_FIXED_8:
@@ -302,8 +299,8 @@ static void ReorderKeyData(TupleDataCollection &new_key_data, TupleDataAppendSta
                            TupleDataChunkState &input, const idx_t &count) {
 	D_ASSERT(!SORT_KEY::CONSTANT_SIZE);
 	const auto row_locations = FlatVector::GetData<const SORT_KEY *>(input.row_locations);
-	const auto heap_locations = FlatVector::GetDataMutable<data_ptr_t>(input.heap_locations);
-	const auto heap_sizes = FlatVector::GetDataMutable<idx_t>(input.heap_sizes);
+	const auto heap_locations = FlatVector::GetData<data_ptr_t>(input.heap_locations);
+	const auto heap_sizes = FlatVector::GetData<idx_t>(input.heap_sizes);
 	for (idx_t i = 0; i < count; i++) {
 		const auto &sort_key = *row_locations[i];
 		heap_locations[i] = sort_key.GetData();
@@ -321,7 +318,7 @@ static void ReorderPayloadData(TupleDataCollection &new_payload_data,
                                TupleDataAppendState &new_payload_data_append_state, SORT_KEY *const *const key_ptrs,
                                TupleDataChunkState &input, const idx_t &count) {
 	D_ASSERT(SORT_KEY::HAS_PAYLOAD);
-	const auto row_locations = FlatVector::GetDataMutable<data_ptr_t>(input.row_locations);
+	const auto row_locations = FlatVector::GetData<data_ptr_t>(input.row_locations);
 	for (idx_t i = 0; i < count; i++) {
 		const auto &sort_key = *key_ptrs[i];
 		row_locations[i] = sort_key.GetPayload();
@@ -363,7 +360,7 @@ static void TemplatedReorder(ClientContext &context, unique_ptr<TupleDataCollect
 	// These states will be populated for appends
 	TupleDataChunkState new_key_data_input;
 	TupleDataChunkState new_payload_data_input;
-	const auto key_ptrs = FlatVector::GetDataMutable<SORT_KEY *>(new_key_data_input.row_locations);
+	const auto key_ptrs = FlatVector::GetData<SORT_KEY *>(new_key_data_input.row_locations);
 
 	// Iterate over sort keys
 	const idx_t total_count = key_data->Count();
@@ -372,7 +369,9 @@ static void TemplatedReorder(ClientContext &context, unique_ptr<TupleDataCollect
 
 	idx_t index = 0;
 	while (index < total_count) {
-		context.InterruptCheck();
+		if (context.interrupted.load(std::memory_order_relaxed)) {
+			throw InterruptException();
+		}
 
 		const auto next = MinValue<idx_t>(total_count - index, STANDARD_VECTOR_SIZE);
 		for (idx_t i = 0; i < next; i++) {

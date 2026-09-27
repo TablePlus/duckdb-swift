@@ -1,13 +1,10 @@
 #include "duckdb/main/attached_database.hpp"
-#include "duckdb/logging/log_manager.hpp"
 
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/common/constants.hpp"
-#include "duckdb/common/enums/checkpoint_on_detach.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/database_manager.hpp"
-#include "duckdb/main/settings.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/storage/storage_manager.hpp"
@@ -15,14 +12,12 @@
 #include "duckdb/main/database_path_and_type.hpp"
 #include "duckdb/main/valid_checker.hpp"
 #include "duckdb/storage/block_allocator.hpp"
-#include "duckdb/storage/block_manager.hpp"
-#include "duckdb/storage/metadata/metadata_manager.hpp"
 #include "duckdb/main/settings.hpp"
 
 namespace duckdb {
 
 StoredDatabasePath::StoredDatabasePath(DatabaseManager &db_manager, DatabaseFilePathManager &manager, string path_p,
-                                       const Identifier &name)
+                                       const string &name)
     : db_manager(db_manager), manager(manager), path(std::move(path_p)) {
 }
 
@@ -118,7 +113,7 @@ ValidChecker &ValidChecker::Get(AttachedDatabase &db) {
 
 AttachedDatabase::AttachedDatabase(DatabaseInstance &db, AttachedDatabaseType type)
     : CatalogEntry(CatalogType::DATABASE_ENTRY,
-                   Identifier(type == AttachedDatabaseType::SYSTEM_DATABASE ? SYSTEM_CATALOG : TEMP_CATALOG), 0),
+                   type == AttachedDatabaseType::SYSTEM_DATABASE ? SYSTEM_CATALOG : TEMP_CATALOG, 0),
       db(db), validity(db), type(type), close_lock(make_shared_ptr<mutex>()) {
 	// This database does not have storage, or uses temporary_objects for in-memory storage.
 	D_ASSERT(type == AttachedDatabaseType::TEMP_DATABASE || type == AttachedDatabaseType::SYSTEM_DATABASE);
@@ -134,7 +129,7 @@ AttachedDatabase::AttachedDatabase(DatabaseInstance &db, AttachedDatabaseType ty
 	internal = true;
 }
 
-AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, Identifier name_p, string file_path_p,
+AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, string name_p, string file_path_p,
                                    AttachOptions &options)
     : CatalogEntry(CatalogType::DATABASE_ENTRY, catalog_p, std::move(name_p)), db(db), validity(db),
       parent_catalog(&catalog_p), close_lock(make_shared_ptr<mutex>()) {
@@ -145,9 +140,7 @@ AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, Ide
 	}
 	recovery_mode = options.recovery_mode;
 	visibility = options.visibility;
-	ephemeral = options.ephemeral;
 	vacuum_rebuild_threshold = options.vacuum_rebuild_indexes_threshold;
-	original_path = options.original_path;
 
 	// We create the storage after the catalog to guarantee we allow extensions to instantiate the DuckCatalog.
 	catalog = make_uniq<DuckCatalog>(*this);
@@ -159,7 +152,7 @@ AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, Ide
 }
 
 AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, StorageExtension &storage_extension_p,
-                                   ClientContext &context, Identifier name_p, AttachInfo &info, AttachOptions &options)
+                                   ClientContext &context, string name_p, AttachInfo &info, AttachOptions &options)
     : CatalogEntry(CatalogType::DATABASE_ENTRY, catalog_p, std::move(name_p)), db(db), validity(db),
       parent_catalog(&catalog_p), storage_extension(&storage_extension_p), close_lock(make_shared_ptr<mutex>()) {
 	if (options.access_mode == AccessMode::READ_ONLY) {
@@ -169,12 +162,10 @@ AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, Sto
 	}
 	recovery_mode = options.recovery_mode;
 	visibility = options.visibility;
-	ephemeral = options.ephemeral;
 	vacuum_rebuild_threshold = options.vacuum_rebuild_indexes_threshold;
-	original_path = options.original_path;
 
 	optional_ptr<StorageExtensionInfo> storage_info = storage_extension->storage_info.get();
-	catalog = storage_extension->attach(storage_info, context, *this, name.GetIdentifierName(), info, options);
+	catalog = storage_extension->attach(storage_info, context, *this, name, info, options);
 	stored_database_path = std::move(options.stored_database_path);
 	if (!catalog) {
 		throw InternalException("AttachedDatabase - attach function did not return a catalog");
@@ -211,7 +202,7 @@ bool AttachedDatabase::IsReadOnly() const {
 	return type == AttachedDatabaseType::READ_ONLY_DATABASE;
 }
 
-bool AttachedDatabase::NameIsReserved(const Identifier &name) {
+bool AttachedDatabase::NameIsReserved(const string &name) {
 	return name == DEFAULT_SCHEMA || name == TEMP_CATALOG || name == SYSTEM_CATALOG;
 }
 
@@ -235,32 +226,22 @@ static string RemoveQueryParams(const string &name) {
 	return vec[0];
 }
 
-Identifier AttachedDatabase::ExtractDatabaseName(const string &dbpath, FileSystem &fs) {
+string AttachedDatabase::ExtractDatabaseName(const string &dbpath, FileSystem &fs) {
 	if (dbpath.empty() || dbpath == IN_MEMORY_PATH) {
-		return Identifier("memory");
+		return "memory";
 	}
 	auto name = RemoveQueryParams(fs.ExtractBaseName(dbpath));
-	if (NameIsReserved(Identifier(name))) {
+	if (NameIsReserved(name)) {
 		name += "_db";
 	}
-	return Identifier(name);
+	return name;
 }
 
-void AttachedDatabase::InvokeCloseIfLastReference(shared_ptr<AttachedDatabase> &attached_db, ClientContext &context) {
-	auto close_action = DatabaseCloseAction::CHECKPOINT;
-	auto checkpoint_on_detach = Settings::Get<CheckpointOnDetachSetting>(context);
-	if (checkpoint_on_detach == CheckpointOnDetach::ENABLED) {
-		close_action = DatabaseCloseAction::CHECKPOINT;
-	} else if (checkpoint_on_detach == CheckpointOnDetach::DISABLED) {
-		close_action = DatabaseCloseAction::SKIP_CHECKPOINT;
-	} else if (!DBConfig::GetConfig(context).options.checkpoint_on_shutdown) {
-		close_action = DatabaseCloseAction::SKIP_CHECKPOINT;
-	}
-
+void AttachedDatabase::InvokeCloseIfLastReference(shared_ptr<AttachedDatabase> &attached_db) {
 	auto close_lock = attached_db->close_lock;
 	lock_guard<mutex> guard(*close_lock);
 	if (attached_db.use_count() == 1) {
-		attached_db->Close(close_action);
+		attached_db->Close(DatabaseCloseAction::CHECKPOINT);
 	}
 	attached_db.reset();
 }
@@ -324,7 +305,7 @@ void AttachedDatabase::Invalidate(const string &reason) {
 	                      : "Detach and reattach it before using it again.";
 	ValidChecker::Invalidate(*this, StringUtil::Format("Database \"%s\" has been invalidated because checkpointing "
 	                                                   "failed. %s Original error: %s",
-	                                                   GetName().GetIdentifierName(), recovery, reason));
+	                                                   GetName(), recovery, reason));
 }
 
 void AttachedDatabase::SetInitialDatabase() {
@@ -361,14 +342,8 @@ void AttachedDatabase::Close(const DatabaseCloseAction action) {
 		}
 
 		if (create_checkpoint) {
-			auto should_checkpoint = false;
-			if (action == DatabaseCloseAction::CHECKPOINT) {
-				should_checkpoint = true;
-			} else if (action == DatabaseCloseAction::TRY_CHECKPOINT) {
-				auto &config = DBConfig::GetConfig(db);
-				should_checkpoint = config.options.checkpoint_on_shutdown;
-			}
-			if (should_checkpoint) {
+			auto &config = DBConfig::GetConfig(db);
+			if (config.options.checkpoint_on_shutdown) {
 				CheckpointOptions options;
 				options.wal_action = CheckpointWALAction::DELETE_WAL;
 				storage->CreateCheckpoint(QueryContext(), options);

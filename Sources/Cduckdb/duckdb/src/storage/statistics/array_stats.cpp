@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/storage/statistics/array_stats.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -58,14 +57,14 @@ void ArrayStats::SetChildStats(BaseStatistics &stats, unique_ptr<BaseStatistics>
 	}
 }
 
-void ArrayStats::Merge(BaseStatistics &stats, const BaseStatistics &other, StatsMergeType merge_type) {
+void ArrayStats::Merge(BaseStatistics &stats, const BaseStatistics &other) {
 	if (other.GetType().id() == LogicalTypeId::VALIDITY) {
 		return;
 	}
 
 	auto &child_stats = ArrayStats::GetChildStats(stats);
 	auto &other_child_stats = ArrayStats::GetChildStats(other);
-	child_stats.Merge(other_child_stats, merge_type);
+	child_stats.Merge(other_child_stats);
 }
 
 void ArrayStats::Serialize(const BaseStatistics &stats, Serializer &serializer) {
@@ -84,20 +83,18 @@ void ArrayStats::Deserialize(Deserializer &deserializer, BaseStatistics &base) {
 	deserializer.Unset<LogicalType>();
 }
 
-child_list_t<Value> ArrayStats::ToStruct(const BaseStatistics &stats) {
+string ArrayStats::ToString(const BaseStatistics &stats) {
 	auto &child_stats = ArrayStats::GetChildStats(stats);
-	child_list_t<Value> result;
-	result.emplace_back("child_stats", child_stats.ToStruct());
-	return result;
+	return StringUtil::Format("[%s]", child_stats.ToString());
 }
 
-void ArrayStats::Verify(const BaseStatistics &stats, const Vector &vector, const SelectionVector &sel, idx_t count) {
+void ArrayStats::Verify(const BaseStatistics &stats, Vector &vector, const SelectionVector &sel, idx_t count) {
 	auto &child_stats = ArrayStats::GetChildStats(stats);
-	const auto &child_entry = ArrayVector::GetChild(vector);
+	auto &child_entry = ArrayVector::GetEntry(vector);
 	auto array_size = ArrayType::GetSize(vector.GetType());
 
 	UnifiedVectorFormat vdata;
-	vector.ToUnifiedFormat(vdata);
+	vector.ToUnifiedFormat(count, vdata);
 
 	// Basically,
 	// 1. Count the number of valid arrays

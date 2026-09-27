@@ -2,7 +2,6 @@
 
 #include "duckdb/catalog/catalog_entry/duck_index_entry.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
-#include "duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -22,10 +21,6 @@
 #include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/storage/table/column_data.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
-#include "duckdb/storage/data_table.hpp"
-#include "duckdb/storage/wal_entry.hpp"
-#include "duckdb/main/attached_database.hpp"
-#include "duckdb/main/database.hpp"
 
 namespace duckdb {
 
@@ -226,12 +221,6 @@ public:
 		serializer.WriteProperty(field_id, tag, value);
 	}
 
-	//! Serialize a generated WAL entry struct (its fields follow the WALType marker written in the constructor)
-	template <class T>
-	void WriteEntry(const T &entry) {
-		entry.Serialize(serializer);
-	}
-
 	template <class FUNC>
 	void WriteList(const field_id_t field_id, const char *tag, idx_t count, FUNC func) {
 		serializer.WriteList(field_id, tag, count, func);
@@ -271,8 +260,7 @@ void WriteAheadLog::WriteHeader() {
 
 	auto &single_file_block_manager = database.GetStorageManager().GetBlockManager().Cast<SingleFileBlockManager>();
 	auto file_version_number = single_file_block_manager.GetVersionNumber();
-	// double check
-	if (StorageManager::TargetAtLeastVersion(StorageVersion::V1_3_0, file_version_number)) {
+	if (file_version_number > 66) {
 		auto db_identifier = single_file_block_manager.GetDBIdentifier();
 		serializer.WriteList(102, "db_identifier", MainHeader::DB_IDENTIFIER_LEN,
 		                     [&](Serializer::List &list, idx_t i) { list.WriteElement(db_identifier[i]); });
@@ -290,7 +278,7 @@ void WriteAheadLog::WriteHeader() {
 
 void WriteAheadLog::WriteCheckpoint(MetaBlockPointer meta_block) {
 	WriteAheadLogSerializer serializer(*this, WALType::CHECKPOINT);
-	serializer.WriteEntry(WALCheckpoint {meta_block});
+	serializer.WriteProperty(101, "meta_block", meta_block);
 	serializer.End();
 }
 
@@ -299,7 +287,7 @@ void WriteAheadLog::WriteCheckpoint(MetaBlockPointer meta_block) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteCreateTable(const TableCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_TABLE);
-	serializer.WriteEntry(WALCreateTable {entry.GetInfo()});
+	serializer.WriteProperty(101, "table", &entry);
 	serializer.End();
 }
 
@@ -308,9 +296,8 @@ void WriteAheadLog::WriteCreateTable(const TableCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteDropTable(const TableCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_TABLE);
-	// the qualified name carries the (possibly nested) containing schema path + the table name; the legacy immediate
-	// schema name is derived from it when serializing for storage versions older than v2.0.0
-	serializer.WriteEntry(WALDropTable(QualifiedName(entry.schema.GetSchemaPath(), entry.name)));
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
@@ -319,16 +306,7 @@ void WriteAheadLog::WriteDropTable(const TableCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteCreateSchema(const SchemaCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_SCHEMA);
-	// serialize the schema as a QualifiedName: parent schemas form the path, the schema name is the name. For storage
-	// versions older than v2.0.0 (which only support top-level schemas) the legacy "schema" name field is written.
-	vector<Identifier> parent_schemas;
-	auto parent = entry.GetParentSchema();
-	while (parent) {
-		parent_schemas.push_back(parent->name);
-		parent = parent->GetParentSchema();
-	}
-	std::reverse(parent_schemas.begin(), parent_schemas.end());
-	serializer.WriteEntry(WALCreateSchema {entry.name, QualifiedName(std::move(parent_schemas), entry.name)});
+	serializer.WriteProperty(101, "schema", entry.name);
 	serializer.End();
 }
 
@@ -337,22 +315,24 @@ void WriteAheadLog::WriteCreateSchema(const SchemaCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteCreateSequence(const SequenceCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_SEQUENCE);
-	serializer.WriteEntry(WALCreateSequence {entry.GetInfo()});
+	serializer.WriteProperty(101, "sequence", &entry);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteDropSequence(const SequenceCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_SEQUENCE);
-	serializer.WriteEntry(WALDropSequence {entry.schema.name, entry.name});
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteSequenceValue(SequenceValue val) {
 	auto &sequence = *val.entry;
 	WriteAheadLogSerializer serializer(*this, WALType::SEQUENCE_VALUE);
-	// last_value (id 105) is only serialized from storage version v2.0.0 onwards, and is omitted when unset
-	serializer.WriteEntry(WALSequenceValue {sequence.schema.name, sequence.name, val.usage_count, val.counter,
-	                                        val.entry->GetData().last_value});
+	serializer.WriteProperty(101, "schema", sequence.schema.name);
+	serializer.WriteProperty(102, "name", sequence.name);
+	serializer.WriteProperty(103, "usage_count", val.usage_count);
+	serializer.WriteProperty(104, "counter", val.counter);
 	serializer.End();
 }
 
@@ -361,25 +341,27 @@ void WriteAheadLog::WriteSequenceValue(SequenceValue val) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteCreateMacro(const ScalarMacroCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_MACRO);
-	serializer.WriteEntry(WALCreateMacro {entry.GetInfo()});
+	serializer.WriteProperty(101, "macro", &entry);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteDropMacro(const ScalarMacroCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_MACRO);
-	serializer.WriteEntry(WALDropMacro {entry.schema.name, entry.name});
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteCreateTableMacro(const TableMacroCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_TABLE_MACRO);
-	serializer.WriteEntry(WALCreateTableMacro {entry.GetInfo()});
+	serializer.WriteProperty(101, "table", &entry);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteDropTableMacro(const TableMacroCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_TABLE_MACRO);
-	serializer.WriteEntry(WALDropTableMacro {entry.schema.name, entry.name});
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
@@ -388,11 +370,10 @@ void WriteAheadLog::WriteDropTableMacro(const TableMacroCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 
 void SerializeIndex(AttachedDatabase &db, WriteAheadLogSerializer &serializer, TableIndexList &list,
-                    const Identifier &name) {
+                    const string &name) {
 	case_insensitive_map_t<Value> options;
 	auto storage_version = db.GetStorageManager().GetStorageVersion();
-	// Before: serialization version 3
-	auto v1_0_0_storage = StorageManager::IsPriorToVersion(StorageVersion::V1_2_0, storage_version);
+	auto v1_0_0_storage = storage_version < 3;
 	if (!v1_0_0_storage) {
 		options["v1_0_0_storage"] = v1_0_0_storage;
 	}
@@ -428,7 +409,8 @@ void WriteAheadLog::WriteCreateIndex(const IndexCatalogEntry &entry) {
 
 void WriteAheadLog::WriteDropIndex(const IndexCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_INDEX);
-	serializer.WriteEntry(WALDropIndex {entry.schema.name, entry.name});
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
@@ -437,28 +419,14 @@ void WriteAheadLog::WriteDropIndex(const IndexCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteCreateType(const TypeCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_TYPE);
-	serializer.WriteEntry(WALCreateType {entry.GetInfo()});
+	serializer.WriteProperty(101, "type", &entry);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteDropType(const TypeCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_TYPE);
-	serializer.WriteEntry(WALDropType {entry.schema.name, entry.name});
-	serializer.End();
-}
-
-//===--------------------------------------------------------------------===//
-// TRIGGERS
-//===--------------------------------------------------------------------===//
-void WriteAheadLog::WriteCreateTrigger(const TriggerCatalogEntry &entry) {
-	WriteAheadLogSerializer serializer(*this, WALType::CREATE_TRIGGER);
-	serializer.WriteEntry(WALCreateTrigger {entry.GetInfo()});
-	serializer.End();
-}
-
-void WriteAheadLog::WriteDropTrigger(const TriggerCatalogEntry &entry) {
-	WriteAheadLogSerializer serializer(*this, WALType::DROP_TRIGGER);
-	serializer.WriteEntry(WALDropTrigger {entry.schema.name, entry.name, entry.base_table->Table()});
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
@@ -467,13 +435,14 @@ void WriteAheadLog::WriteDropTrigger(const TriggerCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteCreateView(const ViewCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::CREATE_VIEW);
-	serializer.WriteEntry(WALCreateView {entry.GetInfo()});
+	serializer.WriteProperty(101, "view", &entry);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteDropView(const ViewCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_VIEW);
-	serializer.WriteEntry(WALDropView {entry.schema.name, entry.name});
+	serializer.WriteProperty(101, "schema", entry.schema.name);
+	serializer.WriteProperty(102, "name", entry.name);
 	serializer.End();
 }
 
@@ -482,31 +451,23 @@ void WriteAheadLog::WriteDropView(const ViewCatalogEntry &entry) {
 //===--------------------------------------------------------------------===//
 void WriteAheadLog::WriteDropSchema(const SchemaCatalogEntry &entry) {
 	WriteAheadLogSerializer serializer(*this, WALType::DROP_SCHEMA);
-	// serialize the schema as a QualifiedName: parent schemas form the path, the schema name is the name. For storage
-	// versions older than v2.0.0 (which only support top-level schemas) the legacy "schema" name field is written.
-	vector<Identifier> parent_schemas;
-	auto parent = entry.GetParentSchema();
-	while (parent) {
-		parent_schemas.push_back(parent->name);
-		parent = parent->GetParentSchema();
-	}
-	std::reverse(parent_schemas.begin(), parent_schemas.end());
-	serializer.WriteEntry(WALDropSchema {entry.name, QualifiedName(std::move(parent_schemas), entry.name)});
+	serializer.WriteProperty(101, "schema", entry.name);
 	serializer.End();
 }
 
 //===--------------------------------------------------------------------===//
 // DATA
 //===--------------------------------------------------------------------===//
-void WriteAheadLog::WriteSetTable(const Identifier &schema, const Identifier &table) {
+void WriteAheadLog::WriteSetTable(const string &schema, const string &table) {
 	WriteAheadLogSerializer serializer(*this, WALType::USE_TABLE);
-	serializer.WriteEntry(WALUseTable {schema, table});
+	serializer.WriteProperty(101, "schema", schema);
+	serializer.WriteProperty(102, "table", table);
 	serializer.End();
 }
 
 void WriteAheadLog::WriteInsert(DataChunk &chunk) {
 	D_ASSERT(chunk.size() > 0);
-	chunk.Verify(GetDatabase().GetDatabase());
+	chunk.Verify();
 
 	WriteAheadLogSerializer serializer(*this, WALType::INSERT_TUPLE);
 	serializer.WriteProperty(101, "chunk", chunk);
@@ -530,7 +491,7 @@ void WriteAheadLog::WriteRowGroupData(const PersistentCollectionData &data) {
 void WriteAheadLog::WriteDelete(DataChunk &chunk) {
 	D_ASSERT(chunk.size() > 0);
 	D_ASSERT(chunk.ColumnCount() == 1 && chunk.data[0].GetType() == LogicalType::ROW_TYPE);
-	chunk.Verify(GetDatabase().GetDatabase());
+	chunk.Verify();
 
 	WriteAheadLogSerializer serializer(*this, WALType::DELETE_TUPLE);
 	serializer.WriteProperty(101, "chunk", chunk);
@@ -541,7 +502,7 @@ void WriteAheadLog::WriteUpdate(DataChunk &chunk, const vector<column_t> &column
 	D_ASSERT(chunk.size() > 0);
 	D_ASSERT(chunk.ColumnCount() == 2);
 	D_ASSERT(chunk.data[1].GetType().id() == LogicalType::ROW_TYPE);
-	chunk.Verify(GetDatabase().GetDatabase());
+	chunk.Verify();
 
 	WriteAheadLogSerializer serializer(*this, WALType::UPDATE_TUPLE);
 	serializer.WriteProperty(101, "column_indexes", column_indexes);

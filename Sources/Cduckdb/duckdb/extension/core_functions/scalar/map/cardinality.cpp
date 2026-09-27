@@ -8,28 +8,31 @@
 namespace duckdb {
 
 static void CardinalityFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	const auto &map = args.data[0];
-	auto entries = map.Values<list_entry_t>();
+	auto &map = args.data[0];
+	UnifiedVectorFormat map_data;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_data = FlatVector::GetData<uint64_t>(result);
+	auto &result_validity = FlatVector::Validity(result);
 
-	auto result_data = FlatVector::Writer<uint64_t>(result, args.size());
+	map.ToUnifiedFormat(args.size(), map_data);
 	for (idx_t row = 0; row < args.size(); row++) {
-		auto entry = entries[row];
-		if (!entry.IsValid()) {
-			result_data.WriteNull();
-			continue;
-		}
-		result_data.WriteValue(entries.GetValueUnsafe(row).length);
+		auto list_entry = UnifiedVectorFormat::GetData<list_entry_t>(map_data)[map_data.sel->get_index(row)];
+		result_data[row] = list_entry.length;
+		result_validity.Set(row, map_data.validity.RowIsValid(map_data.sel->get_index(row)));
+	}
+
+	if (args.size() == 1) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
 }
 
-static unique_ptr<FunctionData> CardinalityBind(BindScalarFunctionInput &input) {
-	auto &bound_function = input.GetBoundFunction();
-	auto &arguments = input.GetArguments();
+static unique_ptr<FunctionData> CardinalityBind(ClientContext &context, ScalarFunction &bound_function,
+                                                vector<unique_ptr<Expression>> &arguments) {
 	if (arguments.size() != 1) {
 		throw BinderException("Cardinality must have exactly one arguments");
 	}
 
-	if (arguments[0]->GetReturnType().id() != LogicalTypeId::MAP) {
+	if (arguments[0]->return_type.id() != LogicalTypeId::MAP) {
 		throw BinderException("Cardinality can only operate on MAPs");
 	}
 
@@ -39,7 +42,7 @@ static unique_ptr<FunctionData> CardinalityBind(BindScalarFunctionInput &input) 
 
 ScalarFunction CardinalityFun::GetFunction() {
 	ScalarFunction fun({LogicalType::ANY}, LogicalType::UBIGINT, CardinalityFunction, CardinalityBind);
-	fun.SetVarArgs(LogicalType::ANY);
+	fun.varargs = LogicalType::ANY;
 	fun.SetNullHandling(FunctionNullHandling::DEFAULT_NULL_HANDLING);
 	return fun;
 }

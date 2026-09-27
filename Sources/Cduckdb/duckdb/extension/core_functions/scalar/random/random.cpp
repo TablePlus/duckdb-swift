@@ -1,6 +1,7 @@
 #include "core_functions/scalar/random_functions.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/random_engine.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -12,7 +13,7 @@ namespace {
 
 struct ExtractVersionUuidOperator {
 	template <typename INPUT_TYPE, typename RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input) {
+	static RESULT_TYPE Operation(INPUT_TYPE input, Vector &result) {
 		char uuid[36]; // Intentionally no initialize.
 		BaseUUID::ToString(input, uuid);
 		// UUIDv4 and UUIDv7 stores version as the 15-th uint8_t.
@@ -22,7 +23,7 @@ struct ExtractVersionUuidOperator {
 
 struct ExtractTimestampUuidOperator {
 	template <typename INPUT_TYPE, typename RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input) {
+	static RESULT_TYPE Operation(INPUT_TYPE input, Vector &result) {
 		// Validate whether the given UUID is v7.
 		const uint8_t version = (static_cast<uint8_t>((input.upper) >> 8) & 0xf0) >> 4;
 		if (version != 7) {
@@ -45,15 +46,17 @@ struct ExtractTimestampUuidOperator {
 template <typename INPUT, typename OP>
 void ExtractVersionFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 1);
-	const auto &input = args.data[0];
-	UnaryExecutor::Execute<INPUT, uint32_t, OP>(input, result);
+	auto &input = args.data[0];
+	idx_t count = args.size();
+	UnaryExecutor::ExecuteString<INPUT, uint32_t, OP>(input, result, count);
 }
 
 template <typename INPUT, typename OP>
 void ExtractTimestampFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 1);
-	const auto &input = args.data[0];
-	UnaryExecutor::Execute<INPUT, timestamp_t, OP>(input, result);
+	auto &input = args.data[0];
+	idx_t count = args.size();
+	UnaryExecutor::ExecuteString<INPUT, timestamp_t, OP>(input, result, count);
 }
 
 struct RandomLocalState : public FunctionLocalState {
@@ -69,9 +72,9 @@ void RandomFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<RandomLocalState>();
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::Writer<double>(result, args.size());
+	auto result_data = FlatVector::GetData<double>(result);
 	for (idx_t i = 0; i < args.size(); i++) {
-		result_data.WriteValue(lstate.random_engine.NextRandom());
+		result_data[i] = lstate.random_engine.NextRandom();
 	}
 }
 
@@ -87,9 +90,10 @@ void GenerateUUIDv4Function(DataChunk &args, ExpressionState &state, Vector &res
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<RandomLocalState>();
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::Writer<hugeint_t>(result, args.size());
+	auto result_data = FlatVector::GetData<hugeint_t>(result);
+
 	for (idx_t i = 0; i < args.size(); i++) {
-		result_data.WriteValue(UUIDv4::GenerateRandomUUID(lstate.random_engine));
+		result_data[i] = UUIDv4::GenerateRandomUUID(lstate.random_engine);
 	}
 }
 
@@ -98,16 +102,18 @@ void GenerateUUIDv7Function(DataChunk &args, ExpressionState &state, Vector &res
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<RandomLocalState>();
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::Writer<hugeint_t>(result, args.size());
+	auto result_data = FlatVector::GetData<hugeint_t>(result);
+
 	for (idx_t i = 0; i < args.size(); i++) {
-		result_data.WriteValue(UUIDv7::GenerateRandomUUID(lstate.random_engine));
+		result_data[i] = UUIDv7::GenerateRandomUUID(lstate.random_engine);
 	}
 }
 
 } // namespace
 
 ScalarFunction RandomFun::GetFunction() {
-	ScalarFunction random("random", {}, LogicalType::DOUBLE, RandomFunction, nullptr, nullptr, RandomInitLocalState);
+	ScalarFunction random("random", {}, LogicalType::DOUBLE, RandomFunction, nullptr, nullptr, nullptr,
+	                      RandomInitLocalState);
 	random.SetStability(FunctionStability::VOLATILE);
 	return random;
 }
@@ -117,7 +123,7 @@ ScalarFunction UUIDFun::GetFunction() {
 }
 
 ScalarFunction UUIDv4Fun::GetFunction() {
-	ScalarFunction uuid_v4_function({}, LogicalType::UUID, GenerateUUIDv4Function, nullptr, nullptr,
+	ScalarFunction uuid_v4_function({}, LogicalType::UUID, GenerateUUIDv4Function, nullptr, nullptr, nullptr,
 	                                RandomInitLocalState);
 	// generate a random uuid v4
 	uuid_v4_function.SetStability(FunctionStability::VOLATILE);
@@ -125,7 +131,7 @@ ScalarFunction UUIDv4Fun::GetFunction() {
 }
 
 ScalarFunction UUIDv7Fun::GetFunction() {
-	ScalarFunction uuid_v7_function({}, LogicalType::UUID, GenerateUUIDv7Function, nullptr, nullptr,
+	ScalarFunction uuid_v7_function({}, LogicalType::UUID, GenerateUUIDv7Function, nullptr, nullptr, nullptr,
 	                                RandomInitLocalState);
 	// generate a random uuid v7
 	uuid_v7_function.SetStability(FunctionStability::VOLATILE);

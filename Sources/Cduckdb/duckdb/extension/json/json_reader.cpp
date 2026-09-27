@@ -1,5 +1,4 @@
 #include "json_reader.hpp"
-#include "duckdb/main/client_context.hpp"
 
 #include <utility>
 
@@ -143,7 +142,7 @@ idx_t JSONFileHandle::ReadInternal(char *pointer, const idx_t requested_size) {
 	// Deal with reading from pipes
 	idx_t total_read_size = 0;
 	while (total_read_size < requested_size) {
-		auto read_size = file_handle->Read(context, pointer + total_read_size, requested_size - total_read_size);
+		auto read_size = file_handle->Read(pointer + total_read_size, requested_size - total_read_size);
 		if (read_size == 0) {
 			break;
 		}

@@ -13,13 +13,13 @@ string ShowRef::ToString() const {
 	} else if (show_type == ShowType::SHOW_FROM) {
 		result += "SHOW TABLES FROM ";
 		string name = "";
-		if (!GetCatalogName().empty()) {
-			name += SQLIdentifier(GetCatalogName());
-			if (!GetSchemaName().empty()) {
+		if (!catalog_name.empty()) {
+			name += KeywordHelper::WriteOptionallyQuoted(catalog_name, '"');
+			if (!schema_name.empty()) {
 				name += ".";
 			}
 		}
-		name += SQLIdentifier(GetSchemaName());
+		name += KeywordHelper::WriteOptionallyQuoted(schema_name, '"');
 		result += name;
 	} else {
 		result += "DESCRIBE ";
@@ -28,8 +28,8 @@ string ShowRef::ToString() const {
 		result += "(";
 		result += query->ToString();
 		result += ")";
-	} else if (GetTableName() != "__show_tables_expanded") {
-		result += GetTableName().GetIdentifierName();
+	} else if (table_name != "__show_tables_expanded") {
+		result += table_name;
 	}
 	return result;
 }
@@ -44,13 +44,15 @@ bool ShowRef::Equals(const TableRef &other_p) const {
 			return false;
 		}
 	}
-	return GetTableName() == other.GetTableName() && show_type == other.show_type;
+	return table_name == other.table_name && show_type == other.show_type;
 }
 
 unique_ptr<TableRef> ShowRef::Copy() {
 	auto copy = make_uniq<ShowRef>();
 
-	copy->qualified_name = qualified_name;
+	copy->catalog_name = catalog_name;
+	copy->schema_name = schema_name;
+	copy->table_name = table_name;
 	copy->query = query ? query->Copy() : nullptr;
 	copy->show_type = show_type;
 	CopyProperties(*copy);

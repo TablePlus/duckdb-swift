@@ -2,7 +2,7 @@
 
 namespace duckdb {
 
-static inline optional<list_entry_t> GetJSONKeys(yyjson_val *val, yyjson_alc *, Vector &result) {
+static inline list_entry_t GetJSONKeys(yyjson_val *val, yyjson_alc *, Vector &result, ValidityMask &, idx_t) {
 	auto num_keys = yyjson_obj_size(val);
 	auto current_size = ListVector::GetListSize(result);
 	auto new_size = current_size + num_keys;
@@ -13,7 +13,7 @@ static inline optional<list_entry_t> GetJSONKeys(yyjson_val *val, yyjson_alc *, 
 	}
 
 	// Write the strings to the child vector
-	auto keys = FlatVector::GetDataMutable<string_t>(ListVector::GetChildMutable(result));
+	auto keys = FlatVector::GetData<string_t>(ListVector::GetEntry(result));
 	size_t idx, max;
 	yyjson_val *key, *child_val;
 	yyjson_obj_foreach(val, idx, max, key, child_val) {
@@ -23,7 +23,7 @@ static inline optional<list_entry_t> GetJSONKeys(yyjson_val *val, yyjson_alc *, 
 	// Update size
 	ListVector::SetListSize(result, current_size + num_keys);
 
-	return list_entry_t {current_size, num_keys};
+	return {current_size, num_keys};
 }
 
 static void UnaryJSONKeysFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -40,13 +40,13 @@ static void ManyJSONKeysFunction(DataChunk &args, ExpressionState &state, Vector
 
 static void GetJSONKeysFunctionsInternal(ScalarFunctionSet &set, const LogicalType &input_type) {
 	set.AddFunction(ScalarFunction({input_type}, LogicalType::LIST(LogicalType::VARCHAR), UnaryJSONKeysFunction,
-	                               nullptr, nullptr, JSONFunctionLocalState::Init));
-	set.AddFunction(ScalarFunction({{"json", input_type}, {"path", LogicalType::VARCHAR}},
-	                               LogicalType::LIST(LogicalType::VARCHAR), BinaryJSONKeysFunction,
-	                               JSONReadFunctionData::Bind, nullptr, JSONFunctionLocalState::Init));
-	set.AddFunction(ScalarFunction({{"json", input_type}, {"path", LogicalType::LIST(LogicalType::VARCHAR)}},
+	                               nullptr, nullptr, nullptr, JSONFunctionLocalState::Init));
+	set.AddFunction(ScalarFunction({input_type, LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                               BinaryJSONKeysFunction, JSONReadFunctionData::Bind, nullptr, nullptr,
+	                               JSONFunctionLocalState::Init));
+	set.AddFunction(ScalarFunction({input_type, LogicalType::LIST(LogicalType::VARCHAR)},
 	                               LogicalType::LIST(LogicalType::LIST(LogicalType::VARCHAR)), ManyJSONKeysFunction,
-	                               JSONReadManyFunctionData::Bind, nullptr, JSONFunctionLocalState::Init));
+	                               JSONReadManyFunctionData::Bind, nullptr, nullptr, JSONFunctionLocalState::Init));
 }
 
 ScalarFunctionSet JSONFunctions::GetKeysFunction() {
@@ -54,11 +54,10 @@ ScalarFunctionSet JSONFunctions::GetKeysFunction() {
 	GetJSONKeysFunctionsInternal(set, LogicalType::VARCHAR);
 	GetJSONKeysFunctionsInternal(set, LogicalType::JSON());
 	for (auto &func : set.functions) {
-		const auto &sig = func.GetSignature();
-		if (sig.GetParameterCount() == 1 && sig.GetParameter(0).GetType().IsJSONType()) {
+		if (func.arguments.size() == 1 && func.arguments[0].IsJSONType()) {
 			continue;
 		}
-		func.SetFallible();
+		func.errors = FunctionErrors::CAN_THROW_RUNTIME_ERROR;
 	}
 	return set;
 }

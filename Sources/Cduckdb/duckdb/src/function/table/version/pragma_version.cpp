@@ -1,17 +1,17 @@
 #ifndef DUCKDB_PATCH_VERSION
-#define DUCKDB_PATCH_VERSION "0-dev11145"
+#define DUCKDB_PATCH_VERSION "5"
 #endif
 #ifndef DUCKDB_MINOR_VERSION
-#define DUCKDB_MINOR_VERSION 6
+#define DUCKDB_MINOR_VERSION 5
 #endif
 #ifndef DUCKDB_MAJOR_VERSION
 #define DUCKDB_MAJOR_VERSION 1
 #endif
 #ifndef DUCKDB_VERSION
-#define DUCKDB_VERSION "v1.6.0-dev11145"
+#define DUCKDB_VERSION "v1.5.5"
 #endif
 #ifndef DUCKDB_SOURCE_ID
-#define DUCKDB_SOURCE_ID "3305afbcb0"
+#define DUCKDB_SOURCE_ID "d8cdaa3"
 #endif
 #include "duckdb/function/table/system_functions.hpp"
 #include "duckdb/main/database.hpp"
@@ -50,9 +50,10 @@ static void PragmaVersionFunction(ClientContext &context, TableFunctionInput &da
 		// finished returning values
 		return;
 	}
-	output.data[0].Append(Value(DuckDB::LibraryVersion()));
-	output.data[1].Append(Value(DuckDB::SourceID()));
-	output.data[2].Append(Value(DuckDB::ReleaseCodename()));
+	output.SetCardinality(1);
+	output.SetValue(0, 0, DuckDB::LibraryVersion());
+	output.SetValue(1, 0, DuckDB::SourceID());
+	output.SetValue(2, 0, DuckDB::ReleaseCodename());
 
 	data.finished = true;
 }
@@ -78,7 +79,7 @@ const char *DuckDB::LibraryVersion() {
 
 const char *DuckDB::ReleaseCodename() {
 	// dev releases have no name
-	if (!VersioningUtils::IsReleaseVersion(DUCKDB_VERSION)) {
+	if (StringUtil::Contains(DUCKDB_VERSION, "-dev")) {
 		return "Development Version";
 	}
 	if (StringUtil::StartsWith(DUCKDB_VERSION, "v1.2.")) {
@@ -92,9 +93,6 @@ const char *DuckDB::ReleaseCodename() {
 	}
 	if (StringUtil::StartsWith(DUCKDB_VERSION, "v1.5.")) {
 		return "Variegata";
-	}
-	if (StringUtil::StartsWith(DUCKDB_VERSION, "v2.0.")) {
-		return "Cyanoptera";
 	}
 	// add new version names here
 
@@ -130,7 +128,8 @@ static void PragmaPlatformFunction(ClientContext &context, TableFunctionInput &d
 		// finished returning values
 		return;
 	}
-	output.data[0].Append(Value(DuckDB::Platform()));
+	output.SetCardinality(1);
+	output.SetValue(0, 0, DuckDB::Platform());
 	data.finished = true;
 }
 

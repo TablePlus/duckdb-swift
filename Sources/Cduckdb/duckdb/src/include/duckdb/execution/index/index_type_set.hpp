@@ -18,7 +18,7 @@ namespace duckdb {
 
 class IndexTypeSet {
 	mutex lock;
-	identifier_tree_t<IndexType> functions;
+	case_insensitive_tree_t<IndexType> functions;
 
 public:
 	IndexTypeSet();

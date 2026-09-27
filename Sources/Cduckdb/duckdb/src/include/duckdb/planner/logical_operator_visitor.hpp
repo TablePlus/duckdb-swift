@@ -11,7 +11,6 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/planner/bound_tokens.hpp"
 #include "duckdb/planner/logical_tokens.hpp"
-#include "duckdb/common/projection_index.hpp"
 
 #include <functional>
 
@@ -23,7 +22,6 @@ public:
 	virtual ~LogicalOperatorVisitor() {
 	}
 
-	virtual void VisitOperator(unique_ptr<LogicalOperator> &op);
 	virtual void VisitOperator(LogicalOperator &op);
 	virtual void VisitExpression(unique_ptr<Expression> *expression);
 
@@ -39,17 +37,18 @@ protected:
 	void VisitOperatorExpressions(LogicalOperator &op);
 	//! Alternatives for VisitOperatorChildren for operators that have a projection map
 	void VisitOperatorWithProjectionMapChildren(LogicalOperator &op);
-	void VisitChildOfOperatorWithProjectionMap(unique_ptr<LogicalOperator> &child,
-	                                           vector<ProjectionIndex> &projection_map);
+	void VisitChildOfOperatorWithProjectionMap(LogicalOperator &child, vector<idx_t> &projection_map);
 
 	// The VisitExpressionChildren method is called at the end of every call to VisitExpression to recursively visit all
 	// expressions in an expression tree. It can be overloaded to prevent automatically visiting the entire tree.
 	virtual void VisitExpressionChildren(Expression &expression);
 
 	virtual unique_ptr<Expression> VisitReplace(BoundAggregateExpression &expr, unique_ptr<Expression> *expr_ptr);
+	virtual unique_ptr<Expression> VisitReplace(BoundBetweenExpression &expr, unique_ptr<Expression> *expr_ptr);
 	virtual unique_ptr<Expression> VisitReplace(BoundCaseExpression &expr, unique_ptr<Expression> *expr_ptr);
 	virtual unique_ptr<Expression> VisitReplace(BoundCastExpression &expr, unique_ptr<Expression> *expr_ptr);
 	virtual unique_ptr<Expression> VisitReplace(BoundColumnRefExpression &expr, unique_ptr<Expression> *expr_ptr);
+	virtual unique_ptr<Expression> VisitReplace(BoundComparisonExpression &expr, unique_ptr<Expression> *expr_ptr);
 	virtual unique_ptr<Expression> VisitReplace(BoundConjunctionExpression &expr, unique_ptr<Expression> *expr_ptr);
 	virtual unique_ptr<Expression> VisitReplace(BoundConstantExpression &expr, unique_ptr<Expression> *expr_ptr);
 	virtual unique_ptr<Expression> VisitReplace(BoundDefaultExpression &expr, unique_ptr<Expression> *expr_ptr);

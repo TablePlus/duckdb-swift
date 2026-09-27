@@ -16,7 +16,6 @@
 #include "duckdb/storage/table/column_segment_tree.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/enums/scan_vector_type.hpp"
-#include "duckdb/common/enums/scan_options.hpp"
 #include "duckdb/common/serializer/serialization_traits.hpp"
 #include "duckdb/common/atomic_ptr.hpp"
 
@@ -24,11 +23,6 @@ namespace duckdb {
 class ColumnData;
 class ColumnSegment;
 class DatabaseInstance;
-class PartialBlockManager;
-class DuckTableEntry;
-struct ColumnCheckpointState;
-struct ColumnSegmentInfo;
-struct ColumnSegmentInfoScanOptions;
 class RowGroup;
 class RowGroupWriter;
 class StorageManager;
@@ -41,7 +35,6 @@ struct TableScanOptions;
 struct TransactionData;
 struct PersistentColumnData;
 class ValidityColumnData;
-struct ColumnDataFinalizeAppendState;
 
 using column_segment_vector_t = vector<SegmentNode<ColumnSegment>>;
 
@@ -161,31 +154,24 @@ public:
 	//! Initialize an appending phase for this column
 	virtual void InitializeAppend(ColumnAppendState &state);
 	//! Append a vector of type [type] to the end of the column
-	virtual void Append(ColumnAppendState &state, const Vector &vector, idx_t count);
-	virtual void AppendData(ColumnAppendState &state, UnifiedVectorFormat &vdata, idx_t count);
-	//! Finalize appending
-	virtual void FinalizeAppend(ColumnDataFinalizeAppendState &finalize_state, ColumnAppendState &state);
-	void FinalizeAppend(optional_ptr<BaseStatistics> table_stats, ColumnAppendState &state);
-	//! Finalize appending while holding stats_lock (for use by child column calls)
-	void FinalizeAppendLocked(ColumnDataFinalizeAppendState &finalize_state, ColumnAppendState &state);
+	virtual void Append(BaseStatistics &stats, ColumnAppendState &state, Vector &vector, idx_t count);
+	//! Append a vector of type [type] to the end of the column
+	void Append(ColumnAppendState &state, Vector &vector, idx_t count);
+	virtual void AppendData(BaseStatistics &stats, ColumnAppendState &state, UnifiedVectorFormat &vdata, idx_t count);
 	//! Revert a set of appends to the ColumnData
 	virtual void RevertAppend(row_t new_count);
 
 	//! Fetch the vector from the column data that belongs to this specific row
 	virtual idx_t Fetch(ColumnScanState &state, row_t row_id, Vector &result);
-	//! Fetch a batch of row offsets and append them to the vector
-	virtual void FetchRows(TransactionData transaction, ColumnFetchState &state, const StorageIndex &storage_index,
-	                       const idx_t *offsets, const SelectionVector &sel, idx_t count, Vector &result,
-	                       idx_t result_offset);
-	//! Fetches a batch of row offsets for leaf columns.
-	void FetchRowsAtSegmentLevel(TransactionData transaction, ColumnFetchState &state, const idx_t *offsets,
-	                             const SelectionVector &sel, idx_t count, Vector &result, idx_t result_offset);
+	//! Fetch a specific row id and append it to the vector
+	virtual void FetchRow(TransactionData transaction, ColumnFetchState &state, const StorageIndex &storage_index,
+	                      row_t row_id, Vector &result, idx_t result_idx);
 
-	virtual void Update(TransactionData transaction, DuckTableEntry &table_entry, idx_t column_index,
-	                    Vector &update_vector, row_t *row_ids, idx_t update_count, idx_t row_group_start);
-	virtual void UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry,
-	                          const vector<column_t> &column_path, Vector &update_vector, row_t *row_ids,
-	                          idx_t update_count, idx_t depth, idx_t row_group_start);
+	virtual void Update(TransactionData transaction, DataTable &data_table, idx_t column_index, Vector &update_vector,
+	                    row_t *row_ids, idx_t update_count, idx_t row_group_start);
+	virtual void UpdateColumn(TransactionData transaction, DataTable &data_table, const vector<column_t> &column_path,
+	                          Vector &update_vector, row_t *row_ids, idx_t update_count, idx_t depth,
+	                          idx_t row_group_start);
 	virtual unique_ptr<BaseStatistics> GetUpdateStatistics();
 
 	virtual void VisitBlockIds(BlockIdVisitor &visitor) const;
@@ -210,11 +196,10 @@ public:
 	                                          ReadStream &source, const LogicalType &type);
 
 	virtual void GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<idx_t> col_path,
-	                                  vector<ColumnSegmentInfo> &result, const ColumnSegmentInfoScanOptions &options);
+	                                  vector<ColumnSegmentInfo> &result);
 	virtual void Verify(RowGroup &parent);
 
-	FilterPropagateResult CheckZonemap(optional_ptr<ClientContext> context, const StorageIndex &index,
-	                                   TableFilter &filter);
+	FilterPropagateResult CheckZonemap(const StorageIndex &index, TableFilter &filter);
 
 	static shared_ptr<ColumnData> CreateColumn(BlockManager &block_manager, DataTableInfo &info, idx_t column_index,
 	                                           const LogicalType &type,
@@ -228,7 +213,7 @@ public:
 
 protected:
 	//! Append a transient segment
-	void AppendTransientSegment(SegmentLock &l, idx_t start_row, optional_ptr<ColumnSegment> prev_segment);
+	void AppendTransientSegment(SegmentLock &l, idx_t start_row);
 	void AppendSegment(SegmentLock &l, unique_ptr<ColumnSegment> segment);
 
 	void BeginScanVectorInternal(ColumnScanState &state);
@@ -248,9 +233,8 @@ protected:
 	void FetchUpdates(TransactionData transaction, idx_t vector_index, Vector &result, idx_t scan_count,
 	                  UpdateScanType update_type);
 	void FetchUpdateRow(TransactionData transaction, row_t row_id, Vector &result, idx_t result_idx);
-	void UpdateInternal(TransactionData transaction, DuckTableEntry &table_entry, idx_t column_index,
-	                    Vector &update_vector, row_t *row_ids, idx_t update_count, Vector &base_vector,
-	                    idx_t row_group_start);
+	void UpdateInternal(TransactionData transaction, DataTable &data_table, idx_t column_index, Vector &update_vector,
+	                    row_t *row_ids, idx_t update_count, Vector &base_vector, idx_t row_group_start);
 	idx_t FetchUpdateData(ColumnScanState &state, row_t *row_ids, Vector &base_vector, idx_t row_group_start);
 
 	idx_t GetVectorCount(idx_t vector_index) const;

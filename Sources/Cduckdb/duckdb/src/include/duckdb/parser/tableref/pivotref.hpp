@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/parser/tableref.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 
@@ -20,7 +19,7 @@ struct PivotColumnEntry {
 	//! The expression (UNPIVOT only)
 	unique_ptr<ParsedExpression> expr;
 	//! The alias of the pivot column entry
-	Identifier alias;
+	string alias;
 
 	bool Equals(const PivotColumnEntry &other) const;
 	PivotColumnEntry Copy() const;
@@ -38,11 +37,11 @@ struct PivotColumn {
 	//! The set of expressions to pivot on
 	vector<unique_ptr<ParsedExpression>> pivot_expressions;
 	//! The set of unpivot names
-	vector<Identifier> unpivot_names;
+	vector<string> unpivot_names;
 	//! The set of values to pivot on
 	vector<PivotColumnEntry> entries;
 	//! The enum to read pivot values from (if any)
-	Identifier pivot_enum;
+	string pivot_enum;
 	//! Subquery (if any) - used during transform only
 	unique_ptr<QueryNode> subquery;
 
@@ -70,19 +69,19 @@ public:
 	//! The aggregates to compute over the pivot (PIVOT only)
 	vector<unique_ptr<ParsedExpression>> aggregates;
 	//! The names of the unpivot expressions (UNPIVOT only)
-	vector<Identifier> unpivot_names;
+	vector<string> unpivot_names;
 	//! The set of pivots
 	vector<PivotColumn> pivots;
 	//! The groups to pivot over. If none are specified all columns not included in the pivots/aggregate are chosen.
-	vector<Identifier> groups;
+	vector<string> groups;
 	//! Whether or not to include nulls in the result (UNPIVOT only)
 	bool include_nulls;
 	//! The set of values to pivot on (bound pivot only)
 	vector<PivotValueElement> bound_pivot_values;
 	//! The set of bound group names (bound pivot only)
-	vector<Identifier> bound_group_names;
+	vector<string> bound_group_names;
 	//! The set of bound aggregate names (bound pivot only)
-	vector<Identifier> bound_aggregate_names;
+	vector<string> bound_aggregate_names;
 
 public:
 	string ToString() const override;

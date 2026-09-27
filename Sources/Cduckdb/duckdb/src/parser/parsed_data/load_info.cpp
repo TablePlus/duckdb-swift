@@ -12,14 +12,12 @@ unique_ptr<LoadInfo> LoadInfo::Copy() const {
 	result->load_type = load_type;
 	result->repo_is_alias = repo_is_alias;
 	result->version = version;
-	result->alias = alias;
 	return result;
 }
 
 static string LoadInfoToString(LoadType load_type) {
 	switch (load_type) {
 	case LoadType::LOAD:
-	case LoadType::LOAD_AS:
 		return "LOAD";
 	case LoadType::INSTALL:
 		return "INSTALL";
@@ -36,13 +34,10 @@ string LoadInfo::ToString() const {
 	result += StringUtil::Format(" '%s'", filename);
 	if (!repository.empty()) {
 		if (repo_is_alias) {
-			result += " FROM " + SQLIdentifier(repository);
+			result += " FROM " + KeywordHelper::WriteOptionallyQuoted(repository);
 		} else {
-			result += " FROM " + SQLString(repository);
+			result += " FROM " + KeywordHelper::WriteQuoted(repository);
 		}
-	}
-	if (!alias.empty()) {
-		result += " AS " + SQLIdentifier(alias);
 	}
 
 	result += ";";

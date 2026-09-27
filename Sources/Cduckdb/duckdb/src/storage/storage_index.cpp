@@ -106,11 +106,4 @@ bool StorageIndex::IsRowIdColumn() const {
 	return index == DConstants::INVALID_INDEX;
 }
 
-bool StorageIndex::IsRowNumberColumn() const {
-	if (!has_index) {
-		return false;
-	}
-	return index == COLUMN_IDENTIFIER_ROW_NUMBER;
-}
-
 } // namespace duckdb

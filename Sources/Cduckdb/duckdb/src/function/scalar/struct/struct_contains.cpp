@@ -1,7 +1,3 @@
-#include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/map_vector.hpp"
-#include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/scalar/struct_functions.hpp"
@@ -10,7 +6,7 @@
 namespace duckdb {
 
 template <class T, class RETURN_TYPE, bool FIND_NULLS>
-static void TemplatedStructSearch(const Vector &input_vector, const vector<Vector> &members, const Vector &target,
+static void TemplatedStructSearch(Vector &input_vector, vector<unique_ptr<Vector>> &members, Vector &target,
                                   const idx_t count, Vector &result) {
 	// If the return type is not a bool, return the position
 	const auto return_pos = std::is_same<RETURN_TYPE, int32_t>::value;
@@ -18,41 +14,45 @@ static void TemplatedStructSearch(const Vector &input_vector, const vector<Vecto
 	const auto &target_type = target.GetType();
 
 	UnifiedVectorFormat vector_format;
-	input_vector.ToUnifiedFormat(vector_format);
+	input_vector.ToUnifiedFormat(count, vector_format);
 
 	UnifiedVectorFormat target_format;
-	target.ToUnifiedFormat(target_format);
+	target.ToUnifiedFormat(count, target_format);
 	const auto target_data = UnifiedVectorFormat::GetData<T>(target_format);
 
-	vector<const T *> member_data_ptrs;
+	vector<const T *> member_datas;
 	vector<UnifiedVectorFormat> member_vectors;
 	idx_t total_matches = 0;
 	for (const auto &member : members) {
-		if (member.GetType().InternalType() == target_type.InternalType()) {
+		if (member->GetType().InternalType() == target_type.InternalType()) {
 			UnifiedVectorFormat member_format;
-			member.ToUnifiedFormat(member_format);
-			member_data_ptrs.push_back(UnifiedVectorFormat::GetData<T>(member_format));
+			member->ToUnifiedFormat(count, member_format);
+			member_datas.push_back(UnifiedVectorFormat::GetData<T>(member_format));
 			member_vectors.push_back(std::move(member_format));
 			total_matches++;
 		} else {
-			member_data_ptrs.push_back(nullptr);
+			member_datas.push_back(nullptr);
 			member_vectors.push_back(UnifiedVectorFormat());
 		}
 	}
 
 	if (total_matches == 0 && return_pos) {
 		// if there are no members that match the target type, we cannot return a position
-		ConstantVector::SetNull(result, count_t(count));
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, true);
 		return;
 	}
 
-	auto result_data = FlatVector::Writer<RETURN_TYPE>(result, count);
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_data = FlatVector::GetData<RETURN_TYPE>(result);
+	auto &result_validity = FlatVector::Validity(result);
+
 	const auto member_count = members.size();
 	for (idx_t row = 0; row < count; row++) {
 		const auto &member_row_idx = vector_format.sel->get_index(row);
 
 		if (!vector_format.validity.RowIsValid(member_row_idx)) {
-			result_data.WriteNull();
+			result_validity.SetInvalid(row);
 			continue;
 		}
 
@@ -64,19 +64,18 @@ static void TemplatedStructSearch(const Vector &input_vector, const vector<Vecto
 		// We did not find the target (finished, or struct is empty).
 		if (finished) {
 			if (!target_valid || return_pos) {
-				result_data.WriteNull();
+				result_validity.SetInvalid(row);
 			} else {
-				result_data.WriteValue(RETURN_TYPE(false));
+				result_data[row] = false;
 			}
 			continue;
 		}
 
 		bool found = false;
-		RETURN_TYPE found_value {};
 
 		for (idx_t member_idx = 0; member_idx < member_count; member_idx++) {
-			auto &member_data_ptr = member_data_ptrs[member_idx];
-			if (!member_data_ptr) {
+			auto &member_data = member_datas[member_idx];
+			if (!member_data) {
 				continue; // skip if member data is not compatible with the target type
 			}
 			const auto &member_vector = member_vectors[member_idx];
@@ -84,57 +83,55 @@ static void TemplatedStructSearch(const Vector &input_vector, const vector<Vecto
 			const auto col_valid = member_vector.validity.RowIsValid(member_data_idx);
 
 			auto is_null = FIND_NULLS && !col_valid && !target_valid;
-			auto both_valid_and_match =
-			    col_valid && target_valid &&
-			    Equals::Operation<T>(member_data_ptr[member_data_idx], target_data[target_row_idx]);
+			auto both_valid_and_match = col_valid && target_valid &&
+			                            Equals::Operation<T>(member_data[member_data_idx], target_data[target_row_idx]);
 
 			if (is_null || both_valid_and_match) {
 				found = true;
 				if (return_pos) {
-					found_value = UnsafeNumericCast<int32_t>(member_idx + 1);
+					result_data[row] = UnsafeNumericCast<int32_t>(member_idx + 1);
 				} else {
-					found_value = RETURN_TYPE(true);
+					result_data[row] = true;
 				}
 			}
 		}
 
 		if (!found) {
 			if (return_pos) {
-				result_data.WriteNull();
+				result_validity.SetInvalid(row);
 			} else {
-				result_data.WriteValue(RETURN_TYPE(false));
+				result_data[row] = false;
 			}
-		} else {
-			result_data.WriteValue(found_value);
 		}
 	}
 }
 
 template <class RETURN_TYPE, bool FIND_NULLS>
-static void StructNestedOp(const Vector &input_vector, const vector<Vector> &members, const Vector &target,
-                           const idx_t count, Vector &result) {
+static void StructNestedOp(Vector &input_vector, vector<unique_ptr<Vector>> &members, Vector &target, const idx_t count,
+                           Vector &result) {
 	const OrderModifiers order_modifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST);
 
 	// Set up sort keys for nested types.
 	const auto members_size = members.size();
-	vector<Vector> member_sort_key_vectors;
+	vector<unique_ptr<Vector>> member_sort_key_vectors;
 	for (idx_t i = 0; i < members_size; i++) {
 		Vector member_sort_key_vec(LogicalType::BLOB, count);
-		CreateSortKeyHelpers::CreateSortKeyWithValidity(members[i], member_sort_key_vec, order_modifiers);
+		CreateSortKeyHelpers::CreateSortKeyWithValidity(*members[i], member_sort_key_vec, order_modifiers, count);
 
-		member_sort_key_vectors.push_back(std::move(member_sort_key_vec));
+		auto member_sort_key_ptr = make_uniq<Vector>(member_sort_key_vec);
+		member_sort_key_vectors.push_back(std::move(member_sort_key_ptr));
 	}
 
 	Vector target_sort_key_vec(LogicalType::BLOB, count);
-	CreateSortKeyHelpers::CreateSortKeyWithValidity(target, target_sort_key_vec, order_modifiers);
+	CreateSortKeyHelpers::CreateSortKeyWithValidity(target, target_sort_key_vec, order_modifiers, count);
 
 	TemplatedStructSearch<string_t, RETURN_TYPE, FIND_NULLS>(input_vector, member_sort_key_vectors, target_sort_key_vec,
 	                                                         count, result);
 }
 
 template <class RETURN_TYPE, bool FIND_NULLS>
-static void StructSearchOp(const Vector &input_vector, const vector<Vector> &members, const Vector &target,
-                           const idx_t count, Vector &result) {
+static void StructSearchOp(Vector &input_vector, vector<unique_ptr<Vector>> &members, Vector &target, const idx_t count,
+                           Vector &result) {
 	const auto &target_type = target.GetType().InternalType();
 	switch (target_type) {
 	case PhysicalType::BOOL:
@@ -179,48 +176,49 @@ static void StructSearchOp(const Vector &input_vector, const vector<Vector> &mem
 template <class RETURN_TYPE, bool FIND_NULLS = false>
 static void StructSearchFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	if (result.GetType().id() == LogicalTypeId::SQLNULL) {
-		ConstantVector::SetNull(result, count_t(args.size()));
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, true);
 		return;
 	}
 
 	const auto count = args.size();
-	const auto &input_vector = args.data[0];
-	const auto &members = StructVector::GetEntries(input_vector);
-	const auto &target = args.data[1];
+	auto &input_vector = args.data[0];
+	auto &members = StructVector::GetEntries(input_vector);
+	auto &target = args.data[1];
 
 	StructSearchOp<RETURN_TYPE, FIND_NULLS>(input_vector, members, target, count, result);
+
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
 }
 
-static unique_ptr<FunctionData> StructContainsBind(BindScalarFunctionInput &input) {
-	auto &context = input.GetClientContext();
-	auto &bound_function = input.GetBoundFunction();
-	auto &arguments = input.GetArguments();
-	D_ASSERT(bound_function.GetArguments().size() == 2);
-	auto &child_type = arguments[0]->GetReturnType();
+static unique_ptr<FunctionData> StructContainsBind(ClientContext &context, ScalarFunction &bound_function,
+                                                   vector<unique_ptr<Expression>> &arguments) {
+	D_ASSERT(bound_function.arguments.size() == 2);
+	auto &child_type = arguments[0]->return_type;
 	if (child_type.id() == LogicalTypeId::UNKNOWN) {
 		throw ParameterNotResolvedException();
 	}
 
 	if (child_type.id() == LogicalTypeId::SQLNULL) {
-		bound_function.GetArguments()[0] = LogicalTypeId::UNKNOWN;
-		bound_function.GetArguments()[1] = LogicalTypeId::UNKNOWN;
+		bound_function.arguments[0] = LogicalTypeId::UNKNOWN;
+		bound_function.arguments[1] = LogicalTypeId::UNKNOWN;
 		bound_function.SetReturnType(LogicalType::SQLNULL);
 		return nullptr;
 	}
 
-	auto &struct_children = StructType::GetChildTypes(arguments[0]->GetReturnType());
+	auto &struct_children = StructType::GetChildTypes(arguments[0]->return_type);
 	if (struct_children.empty()) {
-		// an empty struct contains nothing, the search always returns false (or position 0)
-		bound_function.GetArguments()[0] = child_type;
-		return nullptr;
+		throw InternalException("Can't check for containment in an empty struct");
 	}
-	if (child_type.id() != LogicalTypeId::TUPLE) {
-		throw BinderException("%s can only be used on unnamed structs", bound_function.GetName());
+	if (!StructType::IsUnnamed(child_type)) {
+		throw BinderException("%s can only be used on unnamed structs", bound_function.name);
 	}
-	bound_function.GetArguments()[0] = child_type;
+	bound_function.arguments[0] = child_type;
 
 	// the value type must match one of the struct's children
-	LogicalType max_child_type = arguments[1]->GetReturnType();
+	LogicalType max_child_type = arguments[1]->return_type;
 	vector<LogicalType> new_child_types;
 	for (auto &child : struct_children) {
 		if (!LogicalType::TryGetMaxLogicalType(context, child.second, max_child_type, max_child_type)) {
@@ -229,7 +227,7 @@ static unique_ptr<FunctionData> StructContainsBind(BindScalarFunctionInput &inpu
 		}
 
 		new_child_types.push_back(max_child_type);
-		bound_function.GetArguments()[1] = max_child_type;
+		bound_function.arguments[1] = max_child_type;
 	}
 
 	child_list_t<LogicalType> cast_children;
@@ -237,19 +235,18 @@ static unique_ptr<FunctionData> StructContainsBind(BindScalarFunctionInput &inpu
 		cast_children.push_back(make_pair(struct_children[i].first, new_child_types[i]));
 	}
 
-	// the input is an unnamed struct - represent it as a TUPLE
-	bound_function.GetArguments()[0] = LogicalType::TUPLE(cast_children);
+	bound_function.arguments[0] = LogicalType::STRUCT(cast_children);
 
 	return nullptr;
 }
 
 ScalarFunction StructContainsFun::GetFunction() {
-	return ScalarFunction("struct_contains", {LogicalTypeId::TUPLE, LogicalType::ANY}, LogicalType::BOOLEAN,
+	return ScalarFunction("struct_contains", {LogicalTypeId::STRUCT, LogicalType::ANY}, LogicalType::BOOLEAN,
 	                      StructSearchFunction<bool>, StructContainsBind);
 }
 
 ScalarFunction StructPositionFun::GetFunction() {
-	ScalarFunction fun("struct_contains", {LogicalTypeId::TUPLE, LogicalType::ANY}, LogicalType::INTEGER,
+	ScalarFunction fun("struct_contains", {LogicalTypeId::STRUCT, LogicalType::ANY}, LogicalType::INTEGER,
 	                   StructSearchFunction<int32_t, true>, StructContainsBind);
 	fun.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
 	return fun;

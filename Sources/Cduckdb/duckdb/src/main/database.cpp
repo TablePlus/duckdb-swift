@@ -1,10 +1,6 @@
 #include "duckdb/main/database.hpp"
-#include "duckdb/common/arrow/arrow_type_extension.hpp"
-#include "duckdb/main/profiler/metrics_manager.hpp"
-#include "duckdb/parser/peg/matcher.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
-#include "duckdb/common/http_util.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/execution/index/index_type_set.hpp"
@@ -12,36 +8,35 @@
 #include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/common/types/type_manager.hpp"
 #include "duckdb/function/compression_function.hpp"
-#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/attached_database.hpp"
-#include "duckdb/main/capi/extension_api.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection_manager.hpp"
 #include "duckdb/main/database_file_opener.hpp"
-#include "duckdb/main/database_file_path_manager.hpp"
 #include "duckdb/main/database_manager.hpp"
-#include "duckdb/main/external_resource_type_registry.hpp"
-#include "duckdb/main/external_resources_manager.hpp"
 #include "duckdb/main/database_path_and_type.hpp"
 #include "duckdb/main/db_instance_cache.hpp"
 #include "duckdb/main/error_manager.hpp"
 #include "duckdb/main/extension_helper.hpp"
-#include "duckdb/main/result_set_manager.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/planner/collation_binding.hpp"
 #include "duckdb/planner/extension_callback.hpp"
-#include "duckdb/storage/block_allocator.hpp"
-#include "duckdb/storage/buffer/buffer_pool.hpp"
-#include "duckdb/storage/compression/empty_validity.hpp"
-#include "duckdb/storage/external_file_cache/external_file_cache.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "duckdb/storage/standard_buffer_manager.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/storage/block_allocator.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/transaction/transaction_manager.hpp"
+#include "duckdb/main/capi/extension_api.hpp"
+#include "duckdb/storage/external_file_cache.hpp"
+#include "duckdb/storage/compression/empty_validity.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/common/http_util.hpp"
 #include "mbedtls_wrapper.hpp"
+#include "duckdb/main/database_file_path_manager.hpp"
+#include "duckdb/main/result_set_manager.hpp"
+#include "duckdb/main/extension_callback_manager.hpp"
 
 #ifndef DUCKDB_NO_THREADS
 #include "duckdb/common/thread.hpp"
@@ -80,11 +75,6 @@ DBConfig::~DBConfig() {
 DatabaseInstance::DatabaseInstance() : db_validity(*this) {
 	config.is_user_config = false;
 	create_api_v1 = nullptr;
-	parser_cache = make_uniq<ParserCache>();
-}
-
-ParserCache &DatabaseInstance::GetParserCache() {
-	return *parser_cache;
 }
 
 DatabaseInstance::~DatabaseInstance() {
@@ -126,20 +116,6 @@ DatabaseManager &DatabaseInstance::GetDatabaseManager() {
 		throw InternalException("Missing DB manager");
 	}
 	return *db_manager;
-}
-
-ExternalResourceTypeRegistry &DatabaseInstance::GetExternalResourceTypeRegistry() {
-	if (!external_resource_type_registry) {
-		throw InternalException("Missing external resource type registry");
-	}
-	return *external_resource_type_registry;
-}
-
-ExternalResourcesManager &DatabaseInstance::GetExternalResourcesManager() {
-	if (!external_resources_manager) {
-		throw InternalException("Missing external resources manager");
-	}
-	return *external_resources_manager;
 }
 
 Catalog &Catalog::GetSystemCatalog(DatabaseInstance &db) {
@@ -225,7 +201,7 @@ shared_ptr<AttachedDatabase> DatabaseInstance::CreateAttachedDatabase(ClientCont
 
 void DatabaseInstance::CreateMainDatabase() {
 	AttachInfo info;
-	info.name = Identifier(AttachedDatabase::ExtractDatabaseName(config.options.database_path, GetFileSystem()));
+	info.name = AttachedDatabase::ExtractDatabaseName(config.options.database_path, GetFileSystem());
 	info.path = config.options.database_path;
 
 	Connection con(*this);
@@ -310,8 +286,6 @@ void DatabaseInstance::Initialize(const char *database_path, DBConfig *user_conf
 	db_file_system = make_uniq<DatabaseFileSystem>(*this);
 	local_db_file_system = make_uniq<LocalDatabaseFileSystem>(*this);
 	db_manager = make_uniq<DatabaseManager>(*this);
-	external_resource_type_registry = make_uniq<ExternalResourceTypeRegistry>();
-	external_resources_manager = make_uniq<ExternalResourcesManager>();
 	if (config.buffer_manager) {
 		buffer_manager = config.buffer_manager;
 	} else {
@@ -320,8 +294,6 @@ void DatabaseInstance::Initialize(const char *database_path, DBConfig *user_conf
 
 	log_manager = make_uniq<LogManager>(*this, LogConfig());
 	log_manager->Initialize();
-
-	metrics_manager = make_uniq<MetricsManager>();
 
 	bool enable_external_file_cache = Settings::Get<EnableExternalFileCacheSetting>(config);
 	external_file_cache = make_uniq<ExternalFileCache>(*this, enable_external_file_cache);
@@ -350,7 +322,7 @@ void DatabaseInstance::Initialize(const char *database_path, DBConfig *user_conf
 		}
 		auto storage_extension = StorageExtension::Find(config, config.options.database_type);
 		if (!storage_extension) {
-			ExtensionHelper::LoadExternalExtension(*this, *config.file_system, {config.options.database_type});
+			ExtensionHelper::LoadExternalExtension(*this, *config.file_system, config.options.database_type);
 		}
 	}
 
@@ -362,7 +334,6 @@ void DatabaseInstance::Initialize(const char *database_path, DBConfig *user_conf
 
 	// only increase thread count after storage init because we get races on catalog otherwise
 	scheduler->SetThreads(config.options.maximum_threads, Settings::Get<ExternalThreadsSetting>(config));
-	scheduler->SetAsyncThreads(config.options.async_threads);
 	scheduler->RelaunchThreads();
 }
 
@@ -438,7 +409,8 @@ LocalDatabaseFileSystem::LocalDatabaseFileSystem(DatabaseInstance &db_p)
 }
 
 FileSystem &LocalDatabaseFileSystem::GetFileSystem() const {
-	if (db.config.file_system->SubSystemIsDisabled(local_fs.GetName())) {
+	auto &vfs = static_cast<VirtualFileSystem &>(*db.config.file_system);
+	if (vfs.SubSystemIsDisabled(local_fs.GetName())) {
 		throw PermissionException("File system %s has been disabled by configuration", local_fs.GetName());
 	}
 	return local_fs;
@@ -524,9 +496,6 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	if (new_config.options.maximum_threads == DConstants::INVALID_INDEX) {
 		config.options.maximum_threads = config.GetSystemMaxThreads(*config.file_system);
 	}
-	if (new_config.options.async_threads == DConstants::INVALID_INDEX) {
-		config.options.async_threads = config.GetSystemMaxAsyncThreads(*config.file_system);
-	}
 	config.allocator = std::move(new_config.allocator);
 	if (!config.allocator) {
 		config.allocator = make_uniq<Allocator>();
@@ -573,7 +542,7 @@ const DBConfig &DBConfig::GetConfig(const ClientContext &context) {
 }
 
 idx_t DatabaseInstance::NumberOfThreads() {
-	return scheduler->NumberOfThreads();
+	return NumericCast<idx_t>(scheduler->NumberOfThreads());
 }
 
 idx_t DuckDB::NumberOfThreads() {
@@ -653,10 +622,6 @@ const duckdb_ext_api_v1 DatabaseInstance::GetExtensionAPIV1() {
 
 LogManager &DatabaseInstance::GetLogManager() const {
 	return *log_manager;
-}
-
-MetricsManager &DatabaseInstance::GetMetricsManager() {
-	return *metrics_manager;
 }
 
 ValidChecker &ValidChecker::Get(DatabaseInstance &db) {

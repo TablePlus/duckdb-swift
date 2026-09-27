@@ -20,8 +20,6 @@
 namespace duckdb {
 class AttachedDatabase;
 class ClientContext;
-class SecretManager;
-class SecretStorage;
 struct DatabaseModificationType;
 class Transaction;
 
@@ -41,7 +39,6 @@ class MetaTransaction {
 public:
 	DUCKDB_API MetaTransaction(ClientContext &context, timestamp_t start_timestamp,
 	                           transaction_t global_transaction_id);
-	DUCKDB_API ~MetaTransaction();
 
 	ClientContext &context;
 	//! The timestamp when the transaction started
@@ -80,14 +77,12 @@ public:
 	const vector<reference<AttachedDatabase>> &OpenedTransactions() const {
 		return all_transactions;
 	}
-	optional_ptr<AttachedDatabase> GetReferencedDatabase(const Identifier &name);
-	shared_ptr<AttachedDatabase> GetReferencedDatabaseOwning(const Identifier &name);
+	optional_ptr<AttachedDatabase> GetReferencedDatabase(const string &name);
+	shared_ptr<AttachedDatabase> GetReferencedDatabaseOwning(const string &name);
 	AttachedDatabase &UseDatabase(shared_ptr<AttachedDatabase> &database);
 	void DetachDatabase(AttachedDatabase &database);
 
 private:
-	friend class SecretManager;
-
 	//! Lock to prevent all_transactions and transactions from getting out of sync.
 	mutex lock;
 	//! The set of active transactions for each database.
@@ -103,9 +98,7 @@ private:
 	//! The set of used (referenced) databases.
 	reference_map_t<AttachedDatabase, shared_ptr<AttachedDatabase>> referenced_databases;
 	//! Map of name -> database for databases that are in-use by this transaction.
-	identifier_map_t<reference<AttachedDatabase>> used_databases;
-	//! Secrets that only live for the duration of this transaction.
-	unique_ptr<SecretStorage> transaction_secret_storage;
+	case_insensitive_map_t<reference<AttachedDatabase>> used_databases;
 };
 
 } // namespace duckdb

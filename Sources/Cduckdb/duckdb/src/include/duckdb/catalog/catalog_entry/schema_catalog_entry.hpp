@@ -50,14 +50,6 @@ public:
 public:
 	unique_ptr<CreateInfo> GetInfo() const override;
 
-	//! The parent schema if this is a nested schema, or nullptr for a top-level schema
-	virtual optional_ptr<SchemaCatalogEntry> GetParentSchema() const {
-		return nullptr;
-	}
-
-	//! The full path of this schema (its parent chain outermost first, ending with this schema's own name)
-	vector<Identifier> GetSchemaPath() const;
-
 	//! Scan the specified catalog set, invoking the callback method for every entry
 	virtual void Scan(ClientContext &context, CatalogType type,
 	                  const std::function<void(CatalogEntry &)> &callback) = 0;
@@ -89,7 +81,7 @@ public:
 	                                                        CreatePragmaFunctionInfo &info) = 0;
 	//! Create a collation within the given schema
 	virtual optional_ptr<CatalogEntry> CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) = 0;
-	//! Create a coordinate system within the given schema
+	//! Create a coordiante system within the given schema
 	virtual optional_ptr<CatalogEntry> CreateCoordinateSystem(CatalogTransaction transaction,
 	                                                          CreateCoordinateSystemInfo &info) {
 		throw NotImplementedException("Coordinate systems are not supported in schema '%s'", name);
@@ -107,7 +99,7 @@ public:
 	                                                       const EntryLookupInfo &lookup_info);
 
 	DUCKDB_API optional_ptr<CatalogEntry> GetEntry(CatalogTransaction transaction, CatalogType type,
-	                                               const Identifier &name);
+	                                               const string &name);
 
 	//! Drops an entry from the schema
 	virtual void DropEntry(ClientContext &context, DropInfo &info) = 0;

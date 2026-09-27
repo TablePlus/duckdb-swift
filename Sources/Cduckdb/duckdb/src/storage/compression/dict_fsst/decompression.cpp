@@ -1,9 +1,6 @@
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/storage/compression/dict_fsst/decompression.hpp"
 #include "fsst.h"
 #include "duckdb/common/fsst.hpp"
-#include "duckdb/common/vector/dictionary_vector.hpp"
 
 namespace duckdb {
 namespace dict_fsst {
@@ -33,8 +30,7 @@ string_t CompressedStringScanState::FetchStringFromDict(Vector &result, uint32_t
 		if (all_values_inlined) {
 			return FSSTPrimitives::DecompressInlinedValue(decoder, str_ptr, string_len);
 		} else {
-			return FSSTPrimitives::DecompressValue(decoder, StringVector::GetStringAllocator(result), str_ptr,
-			                                       string_len);
+			return FSSTPrimitives::DecompressValue(decoder, StringVector::GetStringBuffer(result), str_ptr, string_len);
 		}
 	}
 	default:
@@ -44,7 +40,7 @@ string_t CompressedStringScanState::FetchStringFromDict(Vector &result, uint32_t
 }
 
 void CompressedStringScanState::Initialize(bool initialize_dictionary) {
-	baseptr = handle->GetDataMutable() + segment.GetBlockOffset();
+	baseptr = handle->Ptr() + segment.GetBlockOffset();
 
 	// Load header values
 	auto header_ptr = reinterpret_cast<dict_fsst_compression_header_t *>(baseptr);
@@ -86,10 +82,8 @@ void CompressedStringScanState::Initialize(bool initialize_dictionary) {
 	case DictFSSTMode::DICT_FSST: {
 		decoder = new duckdb_fsst_decoder_t;
 		auto ret = duckdb_fsst_import(reinterpret_cast<duckdb_fsst_decoder_t *>(decoder), baseptr + symbol_table_dest);
-		if (ret == 0) {
-			throw IOException("Failed to scan DICT_FSST string segment: invalid FSST symbol table. Database file "
-			                  "appears to be corrupted.");
-		}
+		(void)(ret);
+		D_ASSERT(ret != 0); // FIXME: the old code set the decoder to nullptr instead, why???
 		break;
 	}
 	default:
@@ -104,13 +98,13 @@ void CompressedStringScanState::Initialize(bool initialize_dictionary) {
 		return;
 	}
 
-	dictionary = DictionaryVector::CreateReusableDictionary(segment.GetType(), dict_count);
-	auto &dict_data = dictionary->data;
-	auto dict_child_data = FlatVector::GetDataMutable<string_t>(dict_data);
-	auto &validity = FlatVector::ValidityMutable(dict_data);
+	dictionary = DictionaryVector::CreateReusableDictionary(segment.type, dict_count);
+	auto dict_child_data = FlatVector::GetData<string_t>(dictionary->data);
+	auto &validity = FlatVector::Validity(dictionary->data);
 	D_ASSERT(dict_count >= 1);
 	validity.SetInvalid(0);
 
+	auto &dict_data = dictionary->data;
 	uint32_t offset = 0;
 	for (uint32_t i = 0; i < dict_count; i++) {
 		//! We can uncompress during fetching, we need the length of the string inside the dictionary
@@ -154,13 +148,15 @@ const SelectionVector &CompressedStringScanState::GetSelVec(idx_t start, idx_t s
 }
 
 void CompressedStringScanState::ScanToFlatVector(Vector &result, idx_t result_offset, idx_t start, idx_t scan_count) {
+	auto result_data = FlatVector::GetData<string_t>(result);
+	auto &validity = FlatVector::Validity(result);
+
 	// Create a decompression buffer of sufficient size if we don't already have one.
 	auto &selvec = GetSelVec(start, scan_count);
 
 	//! (index 0 is reserved for NULL, which we don't have in this mode)
 	const idx_t start_offset = mode == DictFSSTMode::FSST_ONLY ? start + 1 : 0;
 
-	auto result_data = FlatVector::Writer<string_t>(result, scan_count, result_offset);
 	if (dictionary) {
 		// We have prepared the full dictionary, we can reference these strings directly
 		auto dictionary_values = FlatVector::GetData<string_t>(dictionary->data);
@@ -168,18 +164,16 @@ void CompressedStringScanState::ScanToFlatVector(Vector &result, idx_t result_of
 			// Lookup dict offset in index buffer
 			auto string_number = selvec.get_index(i + start_offset);
 			if (string_number == 0) {
-				result_data.WriteNull();
-				continue;
+				validity.SetInvalid(result_offset + i);
 			}
-			result_data.WriteStringRef(dictionary_values[string_number]);
+			result_data[result_offset + i] = dictionary_values[string_number];
 		}
 	} else {
 		for (idx_t i = 0; i < scan_count; i++) {
 			// Lookup dict offset in index buffer
 			auto string_number = selvec.get_index(start_offset + i);
 			if (string_number == 0) {
-				result_data.WriteNull();
-				continue;
+				validity.SetInvalid(result_offset);
 			}
 			if (decompress_position > string_number) {
 				throw InternalException("DICT_FSST: not performing a sequential scan?");
@@ -187,17 +181,17 @@ void CompressedStringScanState::ScanToFlatVector(Vector &result, idx_t result_of
 			for (; decompress_position < string_number; decompress_position++) {
 				decompress_offset += string_lengths[decompress_position];
 			}
-			result_data.WriteStringRef(FetchStringFromDict(result, decompress_offset, string_number));
+			result_data[result_offset + i] = FetchStringFromDict(result, decompress_offset, string_number);
 		}
 	}
-	result.Verify();
+	result.Verify(result_offset + scan_count);
 }
 
 void CompressedStringScanState::Select(Vector &result, idx_t start, const SelectionVector &sel, idx_t sel_count) {
 	D_ASSERT(!dictionary);
 	D_ASSERT(mode == DictFSSTMode::FSST_ONLY);
 	idx_t start_offset = start + 1;
-	auto result_data = FlatVector::Writer<string_t>(result, sel_count);
+	auto result_data = FlatVector::GetData<string_t>(result);
 	for (idx_t i = 0; i < sel_count; i++) {
 		// Lookup dict offset in index buffer
 		auto string_number = start_offset + sel.get_index(i);
@@ -207,7 +201,7 @@ void CompressedStringScanState::Select(Vector &result, idx_t start, const Select
 		for (; decompress_position < string_number; decompress_position++) {
 			decompress_offset += string_lengths[decompress_position];
 		}
-		result_data.WriteValue(FetchStringFromDict(result, decompress_offset, string_number));
+		result_data[i] = FetchStringFromDict(result, decompress_offset, string_number);
 	}
 }
 
@@ -230,8 +224,8 @@ void CompressedStringScanState::ScanToDictionaryVector(ColumnSegment &segment, V
 	D_ASSERT(result_offset == 0);
 
 	auto &selvec = GetSelVec(start, scan_count);
-	result.Dictionary(dictionary, selvec, scan_count);
-	result.Verify();
+	result.Dictionary(dictionary, selvec);
+	result.Verify(result_offset + scan_count);
 }
 
 } // namespace dict_fsst

@@ -3,9 +3,10 @@
 namespace duckdb {
 
 DictionaryCompressionCompressState::DictionaryCompressionCompressState(ColumnDataCheckpointData &checkpoint_data_p,
+                                                                       const CompressionInfo &info,
                                                                        const idx_t max_unique_count_across_all_segments)
-    : StandardCompressionState(checkpoint_data_p, CompressionType::COMPRESSION_DICTIONARY),
-      stats_writer(checkpoint_data.GetType()),
+    : DictionaryCompressionState(info), checkpoint_data(checkpoint_data_p),
+      function(checkpoint_data.GetCompressionFunction(CompressionType::COMPRESSION_DICTIONARY)),
       current_string_map(
           info.GetBlockManager().buffer_manager.GetBufferAllocator(),
           max_unique_count_across_all_segments * 2, // * 2 results in less linear probing, improving performance
@@ -16,10 +17,14 @@ DictionaryCompressionCompressState::DictionaryCompressionCompressState(ColumnDat
 }
 
 void DictionaryCompressionCompressState::CreateEmptySegment() {
-	CreateAndPinNewSegment();
+	auto &db = checkpoint_data.GetDatabase();
+	auto &type = checkpoint_data.GetType();
+
+	auto compressed_segment =
+	    ColumnSegment::CreateTransientSegment(db, function, type, info.GetBlockSize(), info.GetBlockManager());
+	current_segment = std::move(compressed_segment);
 
 	// Reset the buffers and the string map.
-	stats_writer.Clear();
 	current_string_map.Clear();
 	index_buffer.clear();
 
@@ -31,8 +36,10 @@ void DictionaryCompressionCompressState::CreateEmptySegment() {
 	next_width = 0;
 
 	// Reset the pointers into the current segment.
-	current_dictionary = DictionaryCompression::GetDictionary(*current_segment, handle);
-	current_end_ptr = handle.GetDataMutable() + current_dictionary.end;
+	auto &buffer_manager = BufferManager::GetBufferManager(checkpoint_data.GetDatabase());
+	current_handle = buffer_manager.Pin(current_segment->block);
+	current_dictionary = DictionaryCompression::GetDictionary(*current_segment, current_handle);
+	current_end_ptr = current_handle.Ptr() + current_dictionary.end;
 }
 
 void DictionaryCompressionCompressState::Verify() {
@@ -54,7 +61,7 @@ bool DictionaryCompressionCompressState::LookupString(string_t str) {
 }
 
 void DictionaryCompressionCompressState::AddNewString(string_t str) {
-	stats_writer.Update(str);
+	UncompressedStringStorage::UpdateStringStats(current_segment->stats, str);
 
 	// Copy string to dict
 	current_dictionary.size += str.GetSize();
@@ -73,21 +80,20 @@ void DictionaryCompressionCompressState::AddNewString(string_t str) {
 		D_ASSERT(!dictionary_string.IsInlined());
 		current_string_map.Insert(dictionary_string);
 	}
-	DictionaryCompression::SetDictionary(*current_segment, handle, current_dictionary);
+	DictionaryCompression::SetDictionary(*current_segment, current_handle, current_dictionary);
 
 	current_width = next_width;
 	current_segment->count++;
 }
 
 void DictionaryCompressionCompressState::AddNull() {
-	stats_writer.SetHasNull();
+	current_segment->stats.statistics.SetHasNullFast();
 	selection_buffer.push_back(0);
 	current_segment->count++;
 }
 
 void DictionaryCompressionCompressState::AddLastLookup(string_t str) {
-	// the string is already in the dictionary - only additive stats (total_string_length) need updating
-	stats_writer.UpdateRepeated(str);
+	UncompressedStringStorage::UpdateStringStats(current_segment->stats, str);
 	selection_buffer.push_back(latest_lookup_result);
 	current_segment->count++;
 }
@@ -105,7 +111,8 @@ bool DictionaryCompressionCompressState::CalculateSpaceRequirements(bool new_str
 
 void DictionaryCompressionCompressState::Flush(bool final) {
 	auto segment_size = Finalize();
-	FlushCurrentSegment(stats_writer, segment_size);
+	auto &state = checkpoint_data.GetCheckpointState();
+	state.FlushSegment(std::move(current_segment), std::move(current_handle), segment_size);
 
 	if (!final) {
 		CreateEmptySegment();
@@ -114,7 +121,7 @@ void DictionaryCompressionCompressState::Flush(bool final) {
 
 idx_t DictionaryCompressionCompressState::Finalize() {
 	auto &buffer_manager = BufferManager::GetBufferManager(checkpoint_data.GetDatabase());
-	auto handle = buffer_manager.Pin(current_segment->GetBlockHandle());
+	auto handle = buffer_manager.Pin(current_segment->block);
 	D_ASSERT(current_dictionary.end == info.GetBlockSize());
 
 	// calculate sizes
@@ -125,7 +132,7 @@ idx_t DictionaryCompressionCompressState::Finalize() {
 	                  index_buffer_size + current_dictionary.size;
 
 	// calculate ptr and offsets
-	auto base_ptr = handle.GetDataMutable();
+	auto base_ptr = handle.Ptr();
 	auto header_ptr = reinterpret_cast<dictionary_compression_header_t *>(base_ptr);
 	auto compressed_selection_buffer_offset = DictionaryCompression::DICTIONARY_HEADER_SIZE;
 	auto index_buffer_offset = compressed_selection_buffer_offset + compressed_selection_buffer_size;

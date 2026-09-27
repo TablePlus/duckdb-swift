@@ -40,8 +40,7 @@ public:
 
 	void MergeStats(TableStatistics &other);
 	void MergeStats(idx_t i, BaseStatistics &stats);
-	void MergeStats(TableStatisticsLock &lock, idx_t i, BaseStatistics &stats,
-	                StatsMergeType merge_type = StatsMergeType::MERGE_STATS);
+	void MergeStats(TableStatisticsLock &lock, idx_t i, BaseStatistics &stats);
 
 	void SetStats(TableStatistics &other);
 	void CopyStats(TableStatistics &other);
@@ -59,7 +58,7 @@ public:
 	void DestroyTableSample(TableStatisticsLock &lock) const;
 	void AppendToTableSample(TableStatisticsLock &lock, unique_ptr<BlockingSample> sample);
 
-	bool Empty() const;
+	bool Empty();
 
 	unique_ptr<TableStatisticsLock> GetLock();
 

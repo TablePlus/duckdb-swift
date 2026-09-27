@@ -69,35 +69,37 @@ struct PragmaTableInfoHelper {
 		return_types.emplace_back(LogicalType::BOOLEAN);
 	}
 
-	static void GetTableColumns(const ColumnDefinition &column, ColumnConstraintInfo constraint_info,
-	                            DataChunk &output) {
-		// "cid", INTEGER
-		output.data[0].Append(Value::INTEGER((int32_t)column.Oid()));
-		// "name", VARCHAR
-		output.data[1].Append(Value(column.Name()));
-		// "type", VARCHAR
-		output.data[2].Append(Value(column.Type().ToString()));
-		// "notnull", BOOLEAN
-		output.data[3].Append(Value::BOOLEAN(constraint_info.not_null));
-		// "dflt_value", VARCHAR
-		output.data[4].Append(DefaultValue(column));
-		// "pk", BOOLEAN
-		output.data[5].Append(Value::BOOLEAN(constraint_info.pk));
+	static void GetTableColumns(const ColumnDefinition &column, ColumnConstraintInfo constraint_info, DataChunk &output,
+	                            idx_t index) {
+		// return values:
+		// "cid", PhysicalType::INT32
+		output.SetValue(0, index, Value::INTEGER((int32_t)column.Oid()));
+		// "name", PhysicalType::VARCHAR
+		output.SetValue(1, index, Value(column.Name()));
+		// "type", PhysicalType::VARCHAR
+		output.SetValue(2, index, Value(column.Type().ToString()));
+		// "notnull", PhysicalType::BOOL
+		output.SetValue(3, index, Value::BOOLEAN(constraint_info.not_null));
+		// "dflt_value", PhysicalType::VARCHAR
+		output.SetValue(4, index, DefaultValue(column));
+		// "pk", PhysicalType::BOOL
+		output.SetValue(5, index, Value::BOOLEAN(constraint_info.pk));
 	}
 
-	static void GetViewColumns(idx_t i, const Identifier &name, const LogicalType &type, DataChunk &output) {
-		// "cid", INTEGER
-		output.data[0].Append(Value::INTEGER((int32_t)i));
-		// "name", VARCHAR
-		output.data[1].Append(Value(name));
-		// "type", VARCHAR
-		output.data[2].Append(Value(type.ToString()));
-		// "notnull", BOOLEAN
-		output.data[3].Append(Value::BOOLEAN(false));
-		// "dflt_value", VARCHAR
-		output.data[4].Append(Value());
-		// "pk", BOOLEAN
-		output.data[5].Append(Value::BOOLEAN(false));
+	static void GetViewColumns(idx_t i, const string &name, const LogicalType &type, DataChunk &output, idx_t index) {
+		// return values:
+		// "cid", PhysicalType::INT32
+		output.SetValue(0, index, Value::INTEGER((int32_t)i));
+		// "name", PhysicalType::VARCHAR
+		output.SetValue(1, index, Value(name));
+		// "type", PhysicalType::VARCHAR
+		output.SetValue(2, index, Value(type.ToString()));
+		// "notnull", PhysicalType::BOOL
+		output.SetValue(3, index, Value::BOOLEAN(false));
+		// "dflt_value", PhysicalType::VARCHAR
+		output.SetValue(4, index, Value());
+		// "pk", PhysicalType::BOOL
+		output.SetValue(5, index, Value::BOOLEAN(false));
 	}
 };
 
@@ -122,39 +124,39 @@ struct PragmaShowHelper {
 		return_types.emplace_back(LogicalType::VARCHAR);
 	}
 
-	static void GetTableColumns(const ColumnDefinition &column, ColumnConstraintInfo constraint_info,
-	                            DataChunk &output) {
-		// "column_name", VARCHAR
-		output.data[0].Append(Value(column.Name()));
-		// "column_type", VARCHAR
-		output.data[1].Append(Value(column.Type().ToString()));
-		// "null", VARCHAR
-		output.data[2].Append(Value(constraint_info.not_null ? "NO" : "YES"));
-		// "key", VARCHAR
+	static void GetTableColumns(const ColumnDefinition &column, ColumnConstraintInfo constraint_info, DataChunk &output,
+	                            idx_t index) {
+		// "column_name", PhysicalType::VARCHAR
+		output.SetValue(0, index, Value(column.Name()));
+		// "column_type", PhysicalType::VARCHAR
+		output.SetValue(1, index, Value(column.Type().ToString()));
+		// "null", PhysicalType::VARCHAR
+		output.SetValue(2, index, Value(constraint_info.not_null ? "NO" : "YES"));
+		// "key", PhysicalType::VARCHAR
 		Value key;
 		if (constraint_info.pk || constraint_info.unique) {
 			key = Value(constraint_info.pk ? "PRI" : "UNI");
 		}
-		output.data[3].Append(key);
+		output.SetValue(3, index, key);
 		// "default", VARCHAR
-		output.data[4].Append(DefaultValue(column));
+		output.SetValue(4, index, DefaultValue(column));
 		// "extra", VARCHAR
-		output.data[5].Append(Value());
+		output.SetValue(5, index, Value());
 	}
 
-	static void GetViewColumns(idx_t i, const Identifier &name, const LogicalType &type, DataChunk &output) {
-		// "column_name", VARCHAR
-		output.data[0].Append(Value(name));
-		// "column_type", VARCHAR
-		output.data[1].Append(Value(type.ToString()));
-		// "null", VARCHAR
-		output.data[2].Append(Value("YES"));
-		// "key", VARCHAR
-		output.data[3].Append(Value());
+	static void GetViewColumns(idx_t i, const string &name, const LogicalType &type, DataChunk &output, idx_t index) {
+		// "column_name", PhysicalType::VARCHAR
+		output.SetValue(0, index, Value(name));
+		// "column_type", PhysicalType::VARCHAR
+		output.SetValue(1, index, Value(type.ToString()));
+		// "null", PhysicalType::VARCHAR
+		output.SetValue(2, index, Value("YES"));
+		// "key", PhysicalType::VARCHAR
+		output.SetValue(3, index, Value());
 		// "default", VARCHAR
-		output.data[4].Append(Value());
+		output.SetValue(4, index, Value());
 		// "extra", VARCHAR
-		output.data[5].Append(Value());
+		output.SetValue(5, index, Value());
 	}
 };
 
@@ -170,8 +172,8 @@ static unique_ptr<FunctionData> PragmaTableInfoBind(ClientContext &context, Tabl
 	auto qname = QualifiedName::Parse(input.inputs[0].GetValue<string>());
 
 	// look up the table name in the catalog
-	Binder::BindSchemaOrCatalog(context, qname);
-	auto &entry = Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, qname);
+	Binder::BindSchemaOrCatalog(context, qname.catalog, qname.schema);
+	auto &entry = Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, qname.catalog, qname.schema, qname.name);
 	return make_uniq<PragmaTableFunctionData>(entry, IS_PRAGMA_TABLE_INFO);
 }
 
@@ -213,9 +215,10 @@ static ColumnConstraintInfo CheckConstraints(TableCatalogEntry &table, const Col
 	return result;
 }
 
-void PragmaTableInfo::GetColumnInfo(TableCatalogEntry &table, const ColumnDefinition &column, DataChunk &output) {
+void PragmaTableInfo::GetColumnInfo(TableCatalogEntry &table, const ColumnDefinition &column, DataChunk &output,
+                                    idx_t index) {
 	auto constraint_info = CheckConstraints(table, column);
-	PragmaShowHelper::GetTableColumns(column, constraint_info, output);
+	PragmaShowHelper::GetTableColumns(column, constraint_info, output, index);
 }
 
 static void PragmaTableInfoTable(PragmaTableOperatorData &data, TableCatalogEntry &table, DataChunk &output,
@@ -227,16 +230,18 @@ static void PragmaTableInfoTable(PragmaTableOperatorData &data, TableCatalogEntr
 	// start returning values
 	// either fill up the chunk or return all the remaining columns
 	idx_t next = MinValue<idx_t>(data.offset + STANDARD_VECTOR_SIZE, table.GetColumns().LogicalColumnCount());
+	output.SetCardinality(next - data.offset);
 
 	for (idx_t i = data.offset; i < next; i++) {
+		auto index = i - data.offset;
 		auto &column = table.GetColumn(LogicalIndex(i));
 		D_ASSERT(column.Oid() < (idx_t)NumericLimits<int32_t>::Maximum());
 		auto constraint_info = CheckConstraints(table, column);
 
 		if (is_table_info) {
-			PragmaTableInfoHelper::GetTableColumns(column, constraint_info, output);
+			PragmaTableInfoHelper::GetTableColumns(column, constraint_info, output, index);
 		} else {
-			PragmaShowHelper::GetTableColumns(column, constraint_info, output);
+			PragmaShowHelper::GetTableColumns(column, constraint_info, output, index);
 		}
 	}
 	data.offset = next;
@@ -256,15 +261,17 @@ static void PragmaTableInfoView(ClientContext &context, PragmaTableOperatorData 
 	// start returning values
 	// either fill up the chunk or return all the remaining columns
 	idx_t next = MinValue<idx_t>(data.offset + STANDARD_VECTOR_SIZE, view_types.size());
+	output.SetCardinality(next - data.offset);
 
 	for (idx_t i = data.offset; i < next; i++) {
+		auto index = i - data.offset;
 		auto type = view_types[i];
-		auto name = i < view.aliases.size() ? view.aliases[i] : view_names[i];
+		auto &name = i < view.aliases.size() ? view.aliases[i] : view_names[i];
 
 		if (is_table_info) {
-			PragmaTableInfoHelper::GetViewColumns(i, name, type, output);
+			PragmaTableInfoHelper::GetViewColumns(i, name, type, output, index);
 		} else {
-			PragmaShowHelper::GetViewColumns(i, name, type, output);
+			PragmaShowHelper::GetViewColumns(i, name, type, output, index);
 		}
 	}
 	data.offset = next;

@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/parser/parsed_data/parse_info.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 
@@ -22,7 +21,7 @@ public:
 	DetachInfo();
 
 	//! The alias of the attached database
-	Identifier name;
+	string name;
 	//! Whether to throw an exception if alias is not found
 	OnEntryNotFound if_not_found;
 

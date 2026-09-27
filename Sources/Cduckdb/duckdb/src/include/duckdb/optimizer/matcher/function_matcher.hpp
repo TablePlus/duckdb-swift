@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include <algorithm>
 
@@ -21,9 +20,9 @@ public:
 	virtual ~FunctionMatcher() {
 	}
 
-	virtual bool Match(const Identifier &name) = 0;
+	virtual bool Match(const string &name) = 0;
 
-	static bool Match(unique_ptr<FunctionMatcher> &matcher, const Identifier &name) {
+	static bool Match(unique_ptr<FunctionMatcher> &matcher, const string &name) {
 		if (!matcher) {
 			return true;
 		}
@@ -34,29 +33,29 @@ public:
 //! The SpecificFunctionMatcher class matches a single specified function name
 class SpecificFunctionMatcher : public FunctionMatcher {
 public:
-	explicit SpecificFunctionMatcher(Identifier name_p) : name(std::move(name_p)) {
+	explicit SpecificFunctionMatcher(string name_p) : name(std::move(name_p)) {
 	}
 
-	bool Match(const Identifier &matched_name) override {
+	bool Match(const string &matched_name) override {
 		return matched_name == this->name;
 	}
 
 private:
-	Identifier name;
+	string name;
 };
 
 //! The ManyFunctionMatcher class matches a set of functions
 class ManyFunctionMatcher : public FunctionMatcher {
 public:
-	explicit ManyFunctionMatcher(identifier_set_t names_p) : names(std::move(names_p)) {
+	explicit ManyFunctionMatcher(unordered_set<string> names_p) : names(std::move(names_p)) {
 	}
 
-	bool Match(const Identifier &name) override {
+	bool Match(const string &name) override {
 		return names.find(name) != names.end();
 	}
 
 private:
-	identifier_set_t names;
+	unordered_set<string> names;
 };
 
 } // namespace duckdb

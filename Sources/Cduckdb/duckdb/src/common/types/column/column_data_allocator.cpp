@@ -1,5 +1,4 @@
 #include "duckdb/common/types/column/column_data_allocator.hpp"
-#include "duckdb/main/client_context.hpp"
 
 #include "duckdb/common/radix_partitioning.hpp"
 #include "duckdb/common/types/column/column_data_collection_segment.hpp"
@@ -49,7 +48,7 @@ ColumnDataAllocator::ColumnDataAllocator(ColumnDataAllocator &other) {
 	case ColumnDataAllocatorType::HYBRID:
 		alloc.buffer_manager = other.alloc.buffer_manager;
 		if (other.managed_result_set.IsValid()) {
-			managed_result_set = ResultSetManager::Get(alloc.buffer_manager->GetDatabase()).Add(*this);
+			ResultSetManager::Get(alloc.buffer_manager->GetDatabase()).Add(*this);
 		}
 		break;
 	case ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR:
@@ -195,40 +194,6 @@ void ColumnDataAllocator::AllocateData(idx_t size, uint32_t &block_id, uint32_t 
 	}
 }
 
-void ColumnDataAllocator::Reset() {
-	for (auto &block : blocks) {
-		block.size = 0;
-	}
-}
-
-void ColumnDataAllocator::ResetPreserveLastBlock() {
-	if (blocks.empty()) {
-		return;
-	}
-	if (type == ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR) {
-		D_ASSERT(blocks.size() == allocated_data.size());
-		if (blocks.size() > 1) {
-			auto last_block = std::move(blocks.back());
-			auto last_allocated = std::move(allocated_data.back());
-			blocks.clear();
-			allocated_data.clear();
-			blocks.push_back(std::move(last_block));
-			allocated_data.push_back(std::move(last_allocated));
-		}
-	} else if (blocks.size() > 1) {
-		auto last_block = std::move(blocks.back());
-		blocks.clear();
-		blocks.push_back(std::move(last_block));
-	}
-	for (auto &block : blocks) {
-		block.size = 0;
-	}
-	allocated_size = 0;
-	for (auto &block : blocks) {
-		allocated_size += block.capacity;
-	}
-}
-
 void ColumnDataAllocator::Initialize(ColumnDataAllocator &other) {
 	D_ASSERT(other.HasBlocks());
 	blocks.push_back(other.blocks.back());
@@ -248,7 +213,7 @@ data_ptr_t ColumnDataAllocator::GetDataPointer(ChunkManagementState &state, uint
 		}
 	}
 	D_ASSERT(state.handles.find(block_id) != state.handles.end());
-	return state.handles[block_id].GetDataMutable() + offset;
+	return state.handles[block_id].Ptr() + offset;
 }
 
 void ColumnDataAllocator::UnswizzlePointers(ChunkManagementState &state, Vector &result,
@@ -264,7 +229,7 @@ void ColumnDataAllocator::UnswizzlePointers(ChunkManagementState &state, Vector 
 	}
 
 	const auto &validity = FlatVector::Validity(result);
-	const auto strings = FlatVector::GetDataMutable<string_t>(result);
+	const auto strings = FlatVector::GetData<string_t>(result);
 
 	// recompute pointers
 	const auto start = NumericCast<idx_t>(v_offset + swizzle_segment.offset);

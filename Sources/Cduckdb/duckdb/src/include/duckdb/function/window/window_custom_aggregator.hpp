@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/function/window/window_aggregator.hpp"
-#include "duckdb/common/enums/window_aggregation_mode.hpp"
 
 namespace duckdb {
 

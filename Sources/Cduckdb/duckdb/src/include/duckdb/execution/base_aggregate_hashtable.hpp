@@ -24,9 +24,6 @@ public:
 	}
 
 protected:
-	static bool AllAggregatesClustered(const vector<AggregateObject> &aggregates);
-	static idx_t CountAggregatesClustered(const vector<AggregateObject> &aggregates);
-
 	Allocator &allocator;
 	BufferManager &buffer_manager;
 	//! A helper for managing offsets into the data buffers

@@ -55,16 +55,6 @@ void ArrowOutputVersionSetting::OnSet(SettingCallbackInfo &info, Value &paramete
 }
 
 //===----------------------------------------------------------------------===//
-// Checkpoint On Detach
-//===----------------------------------------------------------------------===//
-void CheckpointOnDetachSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("checkpoint_on_detach setting cannot be NULL");
-	}
-	EnumUtil::FromString<CheckpointOnDetach>(StringValue::Get(parameter));
-}
-
-//===----------------------------------------------------------------------===//
 // Checkpoint Threshold
 //===----------------------------------------------------------------------===//
 void CheckpointThresholdSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
@@ -90,20 +80,20 @@ void DebugCheckpointAbortSetting::OnSet(SettingCallbackInfo &info, Value &parame
 }
 
 //===----------------------------------------------------------------------===//
-// Debug Order Verification
+// Debug Force External
 //===----------------------------------------------------------------------===//
-void DebugOrderVerificationSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	auto str_input = StringUtil::Upper(input.GetValue<string>());
-	config.options.debug_order_verification = EnumUtil::FromString<DebugOrderVerification>(str_input);
+void DebugForceExternalSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.force_external = input.GetValue<bool>();
 }
 
-void DebugOrderVerificationSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
-	config.options.debug_order_verification = DBConfigOptions().debug_order_verification;
+void DebugForceExternalSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).force_external = ClientConfig().force_external;
 }
 
-Value DebugOrderVerificationSetting::GetSetting(const ClientContext &context) {
-	auto &config = DBConfig::GetConfig(context);
-	return Value(StringUtil::Lower(EnumUtil::ToString(config.options.debug_order_verification)));
+Value DebugForceExternalSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.force_external);
 }
 
 //===----------------------------------------------------------------------===//
@@ -114,16 +104,6 @@ void DebugPhysicalTableScanExecutionStrategySetting::OnSet(SettingCallbackInfo &
 		throw InvalidInputException("debug_physical_table_scan_execution_strategy setting cannot be NULL");
 	}
 	EnumUtil::FromString<PhysicalTableScanExecutionStrategy>(StringValue::Get(parameter));
-}
-
-//===----------------------------------------------------------------------===//
-// Debug Verify Statement
-//===----------------------------------------------------------------------===//
-void DebugVerifyStatementSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("debug_verify_statement setting cannot be NULL");
-	}
-	EnumUtil::FromString<DebugStatementVerification>(StringValue::Get(parameter));
 }
 
 //===----------------------------------------------------------------------===//
@@ -147,26 +127,6 @@ void DebugWindowModeSetting::OnSet(SettingCallbackInfo &info, Value &parameter) 
 }
 
 //===----------------------------------------------------------------------===//
-// Default Io Mode
-//===----------------------------------------------------------------------===//
-void DefaultIoModeSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("default_io_mode setting cannot be NULL");
-	}
-	EnumUtil::FromString<FileIOMode>(StringValue::Get(parameter));
-}
-
-//===----------------------------------------------------------------------===//
-// Default Transaction Invalidation Policy
-//===----------------------------------------------------------------------===//
-void DefaultTransactionInvalidationPolicySetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("default_transaction_invalidation_policy setting cannot be NULL");
-	}
-	EnumUtil::FromString<TransactionInvalidationPolicy>(StringValue::Get(parameter));
-}
-
-//===----------------------------------------------------------------------===//
 // Deprecated Using Key Syntax
 //===----------------------------------------------------------------------===//
 void DeprecatedUsingKeySyntaxSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
@@ -177,13 +137,20 @@ void DeprecatedUsingKeySyntaxSetting::OnSet(SettingCallbackInfo &info, Value &pa
 }
 
 //===----------------------------------------------------------------------===//
-// Dialect Compatibility Mode
+// Enable Caching Operators
 //===----------------------------------------------------------------------===//
-void DialectCompatibilityModeSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("dialect_compatibility_mode setting cannot be NULL");
-	}
-	EnumUtil::FromString<DialectCompatibilityMode>(StringValue::Get(parameter));
+void EnableCachingOperatorsSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.enable_caching_operators = input.GetValue<bool>();
+}
+
+void EnableCachingOperatorsSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).enable_caching_operators = ClientConfig().enable_caching_operators;
+}
+
+Value EnableCachingOperatorsSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.enable_caching_operators);
 }
 
 //===----------------------------------------------------------------------===//
@@ -258,16 +225,6 @@ void PinThreadsSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
 }
 
 //===----------------------------------------------------------------------===//
-// Regex Match Operator Semantics
-//===----------------------------------------------------------------------===//
-void RegexMatchOperatorSemanticsSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("regex_match_operator_semantics setting cannot be NULL");
-	}
-	EnumUtil::FromString<RegexMatchOperatorSemantics>(StringValue::Get(parameter));
-}
-
-//===----------------------------------------------------------------------===//
 // Storage Block Prefetch
 //===----------------------------------------------------------------------===//
 void StorageBlockPrefetchSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
@@ -275,16 +232,6 @@ void StorageBlockPrefetchSetting::OnSet(SettingCallbackInfo &info, Value &parame
 		throw InvalidInputException("storage_block_prefetch setting cannot be NULL");
 	}
 	EnumUtil::FromString<StorageBlockPrefetch>(StringValue::Get(parameter));
-}
-
-//===----------------------------------------------------------------------===//
-// Table Function Identifier Conversion
-//===----------------------------------------------------------------------===//
-void TableFunctionIdentifierConversionSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
-	if (parameter.IsNull()) {
-		throw InvalidInputException("table_function_identifier_conversion setting cannot be NULL");
-	}
-	EnumUtil::FromString<TableFunctionIdentifierConversion>(StringValue::Get(parameter));
 }
 
 //===----------------------------------------------------------------------===//

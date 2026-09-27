@@ -11,7 +11,6 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/execution/operator/csv_scanner/csv_reader_options.hpp"
 #include "duckdb/common/serializer/memory_stream.hpp"
-#include "duckdb/common/query_context.hpp"
 
 namespace duckdb {
 class MemoryStream;
@@ -64,7 +63,7 @@ public:
 
 	//! Create a CSVWriter that writes to a file
 	CSVWriter(CSVReaderOptions &options, FileSystem &fs, const string &file_path, FileCompressionType compression,
-	          QueryContext context = QueryContext(), bool shared = true);
+	          bool shared = true);
 
 	//! Writes header and prefix if necessary
 	void Initialize(bool force = false);

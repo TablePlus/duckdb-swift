@@ -12,7 +12,8 @@ SourceResultType PhysicalCreateSecret::GetDataInternal(ExecutionContext &context
 
 	secret_manager.CreateSecret(client, create_input);
 
-	chunk.data[0].Append(Value::BOOLEAN(true));
+	chunk.SetValue(0, 0, true);
+	chunk.SetCardinality(1);
 
 	return SourceResultType::FINISHED;
 }

@@ -8,7 +8,6 @@
 #include "duckdb/storage/table/column_data_checkpointer.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
-#include "duckdb/storage/partial_block_manager.hpp"
 
 namespace duckdb {
 
@@ -16,19 +15,20 @@ namespace duckdb {
 // Analyze
 //===--------------------------------------------------------------------===//
 struct FixedSizeAnalyzeState : public AnalyzeState {
-	explicit FixedSizeAnalyzeState(BlockManager &block_manager) : AnalyzeState(block_manager), count(0) {
+	explicit FixedSizeAnalyzeState(const CompressionInfo &info) : AnalyzeState(info), count(0) {
 	}
 
 	idx_t count;
 };
 
 unique_ptr<AnalyzeState> FixedSizeInitAnalyze(ColumnData &col_data, PhysicalType type) {
-	return make_uniq<FixedSizeAnalyzeState>(col_data.GetBlockManager());
+	CompressionInfo info(col_data.GetBlockManager());
+	return make_uniq<FixedSizeAnalyzeState>(info);
 }
 
-bool FixedSizeAnalyze(AnalyzeState &state_p, const Vector &input) {
+bool FixedSizeAnalyze(AnalyzeState &state_p, Vector &input, idx_t count) {
 	auto &state = state_p.Cast<FixedSizeAnalyzeState>();
-	state.count += input.size();
+	state.count += count;
 	return true;
 }
 
@@ -43,28 +43,33 @@ idx_t FixedSizeFinalAnalyze(AnalyzeState &state_p) {
 //===--------------------------------------------------------------------===//
 struct UncompressedCompressState : public CompressionState {
 public:
-	explicit UncompressedCompressState(ColumnDataCheckpointData &checkpoint_data);
+	UncompressedCompressState(ColumnDataCheckpointData &checkpoint_data, const CompressionInfo &info);
 
 public:
 	virtual void CreateEmptySegment();
 	void FlushSegment(idx_t segment_size);
 	void Finalize(idx_t segment_size);
-	idx_t FinalizeAppend();
 
 public:
+	ColumnDataCheckpointData &checkpoint_data;
+	const CompressionFunction &function;
 	unique_ptr<ColumnSegment> current_segment;
 	ColumnAppendState append_state;
 };
 
-UncompressedCompressState::UncompressedCompressState(ColumnDataCheckpointData &checkpoint_data)
-    : CompressionState(checkpoint_data, CompressionType::COMPRESSION_UNCOMPRESSED) {
+UncompressedCompressState::UncompressedCompressState(ColumnDataCheckpointData &checkpoint_data,
+                                                     const CompressionInfo &info)
+    : CompressionState(info), checkpoint_data(checkpoint_data),
+      function(checkpoint_data.GetCompressionFunction(CompressionType::COMPRESSION_UNCOMPRESSED)) {
 	UncompressedCompressState::CreateEmptySegment();
 }
 
 void UncompressedCompressState::CreateEmptySegment() {
+	auto &db = checkpoint_data.GetDatabase();
 	auto &type = checkpoint_data.GetType();
 
-	auto compressed_segment = CreateNewSegment();
+	auto compressed_segment =
+	    ColumnSegment::CreateTransientSegment(db, function, type, info.GetBlockSize(), info.GetBlockManager());
 	if (type.InternalType() == PhysicalType::VARCHAR) {
 		auto &state = compressed_segment->GetSegmentState()->Cast<UncompressedStringSegmentState>();
 		auto &storage_manager = checkpoint_data.GetStorageManager();
@@ -76,12 +81,11 @@ void UncompressedCompressState::CreateEmptySegment() {
 	}
 	current_segment = std::move(compressed_segment);
 	current_segment->InitializeAppend(append_state);
-	append_state.InitializeStats(type);
 }
 
 void UncompressedCompressState::FlushSegment(idx_t segment_size) {
 	auto &state = checkpoint_data.GetCheckpointState();
-	if (current_segment->GetType().InternalType() == PhysicalType::VARCHAR) {
+	if (current_segment->type.InternalType() == PhysicalType::VARCHAR) {
 		auto &segment_state = current_segment->GetSegmentState()->Cast<UncompressedStringSegmentState>();
 		if (segment_state.overflow_writer) {
 			segment_state.overflow_writer->Flush();
@@ -99,42 +103,36 @@ void UncompressedCompressState::Finalize(idx_t segment_size) {
 	current_segment.reset();
 }
 
-idx_t UncompressedCompressState::FinalizeAppend() {
-	current_segment->GetStatsMutable().Merge(*append_state.append_stats);
-	return current_segment->FinalizeAppend(append_state);
-}
-
 unique_ptr<CompressionState> UncompressedFunctions::InitCompression(ColumnDataCheckpointData &checkpoint_data,
                                                                     unique_ptr<AnalyzeState> state) {
-	return make_uniq<UncompressedCompressState>(checkpoint_data);
+	return make_uniq<UncompressedCompressState>(checkpoint_data, state->info);
 }
 
-void UncompressedFunctions::Compress(CompressionState &state_p, const Vector &data) {
+void UncompressedFunctions::Compress(CompressionState &state_p, Vector &data, idx_t count) {
 	auto &state = state_p.Cast<UncompressedCompressState>();
 	UnifiedVectorFormat vdata;
-	data.ToUnifiedFormat(vdata);
+	data.ToUnifiedFormat(count, vdata);
 
 	idx_t offset = 0;
-	idx_t remaining = data.size();
-	while (remaining > 0) {
-		idx_t appended = state.current_segment->Append(state.append_state, vdata, offset, remaining);
-		if (appended == remaining) {
+	while (count > 0) {
+		idx_t appended = state.current_segment->Append(state.append_state, vdata, offset, count);
+		if (appended == count) {
 			// appended everything: finished
 			return;
 		}
 		// the segment is full: flush it to disk
-		state.FlushSegment(state.FinalizeAppend());
+		state.FlushSegment(state.current_segment->FinalizeAppend(state.append_state));
 
 		// now create a new segment and continue appending
 		state.CreateEmptySegment();
 		offset += appended;
-		remaining -= appended;
+		count -= appended;
 	}
 }
 
 void UncompressedFunctions::FinalizeCompress(CompressionState &state_p) {
 	auto &state = state_p.Cast<UncompressedCompressState>();
-	state.Finalize(state.FinalizeAppend());
+	state.Finalize(state.current_segment->FinalizeAppend(state.append_state));
 }
 
 //===--------------------------------------------------------------------===//
@@ -146,8 +144,8 @@ struct FixedSizeScanState : public SegmentScanState {
 
 unique_ptr<SegmentScanState> FixedSizeInitScan(const QueryContext &context, ColumnSegment &segment) {
 	auto result = make_uniq<FixedSizeScanState>();
-	auto &buffer_manager = BufferManager::GetBufferManager(segment.GetDatabase());
-	result->handle = buffer_manager.Pin(context, segment.GetBlockHandle());
+	auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
+	result->handle = buffer_manager.Pin(context, segment.block);
 	return std::move(result);
 }
 
@@ -160,12 +158,12 @@ void FixedSizeScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t 
 	auto &scan_state = state.scan_state->Cast<FixedSizeScanState>();
 	auto start = state.GetPositionInSegment();
 
-	auto data = scan_state.handle.GetDataMutable() + segment.GetBlockOffset();
+	auto data = scan_state.handle.Ptr() + segment.GetBlockOffset();
 	auto source_data = data + start * sizeof(T);
 
 	// copy the data from the base table
 	result.SetVectorType(VectorType::FLAT_VECTOR);
-	memcpy(FlatVector::GetDataMutable(result) + result_offset * sizeof(T), source_data, scan_count * sizeof(T));
+	memcpy(FlatVector::GetData(result) + result_offset * sizeof(T), source_data, scan_count * sizeof(T));
 }
 
 template <class T>
@@ -173,11 +171,11 @@ void FixedSizeScan(ColumnSegment &segment, ColumnScanState &state, idx_t scan_co
 	auto &scan_state = state.scan_state->template Cast<FixedSizeScanState>();
 	auto start = state.GetPositionInSegment();
 
-	auto data = scan_state.handle.GetDataMutable() + segment.GetBlockOffset();
+	auto data = scan_state.handle.Ptr() + segment.GetBlockOffset();
 	auto source_data = data + start * sizeof(T);
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
-	FlatVector::SetData(result, source_data, count_t(scan_count));
+	FlatVector::SetData(result, source_data);
 }
 
 //===--------------------------------------------------------------------===//
@@ -186,52 +184,52 @@ void FixedSizeScan(ColumnSegment &segment, ColumnScanState &state, idx_t scan_co
 template <class T>
 void FixedSizeFetchRow(ColumnSegment &segment, ColumnFetchState &state, row_t row_id, Vector &result,
                        idx_t result_idx) {
-	auto &buffer_manager = BufferManager::GetBufferManager(segment.GetDatabase());
-	auto handle = buffer_manager.Pin(segment.GetBlockHandle());
+	auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
+	auto handle = buffer_manager.Pin(segment.block);
 
 	// first fetch the data from the base table
-	auto data_ptr = handle.GetDataMutable() + segment.GetBlockOffset() + NumericCast<idx_t>(row_id) * sizeof(T);
+	auto data_ptr = handle.Ptr() + segment.GetBlockOffset() + NumericCast<idx_t>(row_id) * sizeof(T);
 
-	memcpy(FlatVector::GetDataMutable(result) + result_idx * sizeof(T), data_ptr, sizeof(T));
+	memcpy(FlatVector::GetData(result) + result_idx * sizeof(T), data_ptr, sizeof(T));
 }
 
 //===--------------------------------------------------------------------===//
 // Append
 //===--------------------------------------------------------------------===//
 static unique_ptr<CompressionAppendState> FixedSizeInitAppend(ColumnSegment &segment) {
-	auto &buffer_manager = BufferManager::GetBufferManager(segment.GetDatabase());
-	auto handle = buffer_manager.Pin(segment.GetBlockHandle());
+	auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
+	auto handle = buffer_manager.Pin(segment.block);
 	return make_uniq<CompressionAppendState>(std::move(handle));
 }
 
 struct StandardFixedSizeAppend {
 	template <class T>
-	static void Append(BaseStatistics &stats, data_ptr_t target, idx_t target_offset, UnifiedVectorFormat &adata,
+	static void Append(SegmentStatistics &stats, data_ptr_t target, idx_t target_offset, UnifiedVectorFormat &adata,
 	                   idx_t offset, idx_t count) {
 		auto sdata = UnifiedVectorFormat::GetData<T>(adata);
 		auto tdata = reinterpret_cast<T *>(target);
-		if (adata.validity.CanHaveNull()) {
+		if (!adata.validity.AllValid()) {
 			for (idx_t i = 0; i < count; i++) {
 				auto source_idx = adata.sel->get_index(offset + i);
 				auto target_idx = target_offset + i;
 				bool is_null = !adata.validity.RowIsValid(source_idx);
 				if (!is_null) {
-					stats.SetHasNoNullFast();
-					stats.UpdateNumericStats<T>(sdata[source_idx]);
+					stats.statistics.SetHasNoNullFast();
+					stats.statistics.UpdateNumericStats<T>(sdata[source_idx]);
 					tdata[target_idx] = sdata[source_idx];
 				} else {
-					stats.SetHasNullFast();
+					stats.statistics.SetHasNullFast();
 					// we insert a NullValue<T> in the null gap for debuggability
 					// this value should never be used or read anywhere
 					tdata[target_idx] = NullValue<T>();
 				}
 			}
 		} else {
-			stats.SetHasNoNullFast();
+			stats.statistics.SetHasNoNullFast();
 			for (idx_t i = 0; i < count; i++) {
 				auto source_idx = adata.sel->get_index(offset + i);
 				auto target_idx = target_offset + i;
-				stats.UpdateNumericStats<T>(sdata[source_idx]);
+				stats.statistics.UpdateNumericStats<T>(sdata[source_idx]);
 				tdata[target_idx] = sdata[source_idx];
 			}
 		}
@@ -240,7 +238,7 @@ struct StandardFixedSizeAppend {
 
 struct ListFixedSizeAppend {
 	template <class T>
-	static void Append(BaseStatistics &stats, data_ptr_t target, idx_t target_offset, UnifiedVectorFormat &adata,
+	static void Append(SegmentStatistics &stats, data_ptr_t target, idx_t target_offset, UnifiedVectorFormat &adata,
 	                   idx_t offset, idx_t count) {
 		auto sdata = UnifiedVectorFormat::GetData<uint64_t>(adata);
 		auto tdata = reinterpret_cast<uint64_t *>(target);
@@ -253,11 +251,11 @@ struct ListFixedSizeAppend {
 };
 
 template <class T, class OP>
-idx_t FixedSizeAppend(CompressionAppendState &append_state, ColumnSegment &segment, BaseStatistics &stats,
+idx_t FixedSizeAppend(CompressionAppendState &append_state, ColumnSegment &segment, SegmentStatistics &stats,
                       UnifiedVectorFormat &data, idx_t offset, idx_t count) {
 	D_ASSERT(segment.GetBlockOffset() == 0);
 
-	auto target_ptr = append_state.handle.GetDataMutable();
+	auto target_ptr = append_state.handle.Ptr();
 	idx_t max_tuple_count = segment.SegmentSize() / sizeof(T);
 	idx_t copy_count = MinValue<idx_t>(count, max_tuple_count - segment.count);
 
@@ -267,7 +265,7 @@ idx_t FixedSizeAppend(CompressionAppendState &append_state, ColumnSegment &segme
 }
 
 template <class T>
-idx_t FixedSizeFinalizeAppend(ColumnSegment &segment, BaseStatistics &stats) {
+idx_t FixedSizeFinalizeAppend(ColumnSegment &segment, SegmentStatistics &stats) {
 	return segment.count * sizeof(T);
 }
 

@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
-#include "duckdb/common/optional.hpp"
 #include "duckdb/storage/storage_lock.hpp"
 #include "duckdb/storage/table/segment_lock.hpp"
 #include "duckdb/common/vector.hpp"
@@ -83,17 +82,6 @@ private:
 	//! The index within the segment tree
 	idx_t index;
 };
-
-template <class T>
-struct LoadedSegment {
-	LoadedSegment(shared_ptr<T> segment_p, idx_t row_start_p) : segment(std::move(segment_p)), row_start(row_start_p) {
-	}
-
-	shared_ptr<T> segment;
-	idx_t row_start;
-};
-
-enum class SegmentTreeVerifyMode : uint8_t { CONTIGUOUS, NON_OVERLAPPING };
 
 //! The SegmentTree maintains a list of all segments of a specific column in a table, and allows searching for a segment
 //! by row number
@@ -219,10 +207,6 @@ public:
 		auto l = Lock();
 		AppendSegment(l, std::move(segment));
 	}
-	void AppendSegment(shared_ptr<T> segment, idx_t row_start) {
-		auto l = Lock();
-		AppendSegment(l, std::move(segment), row_start);
-	}
 	void AppendSegment(SegmentLock &l, shared_ptr<T> segment) {
 		LoadAllSegments(l);
 		AppendSegmentInternal(l, std::move(segment));
@@ -276,46 +260,44 @@ public:
 			return false;
 		}
 		idx_t lower = 0;
-		idx_t upper = nodes.size();
-		// binary search to find the node. Searches using half-open interval [lower, upper).
-		while (lower < upper) {
-			idx_t index = lower + (upper - lower) / 2;
+		idx_t upper = nodes.size() - 1;
+		// binary search to find the node
+		while (lower <= upper) {
+			idx_t index = (lower + upper) / 2;
+			if (index >= nodes.size()) {
+				string segments;
+				for (auto &entry : nodes) {
+					segments += StringUtil::Format("Start %d Count %d", entry->GetRowStart(), entry->GetCount());
+				}
+				throw InternalException("Segment tree index not found for row number %d\nSegments:%s", row_number,
+				                        segments);
+			}
 			auto &entry = *nodes[index];
 			if (row_number < entry.GetRowStart()) {
-				// This node and all nodes to the right are excluded.
-				upper = index;
+				upper = index - 1;
 			} else if (row_number >= entry.GetRowEnd()) {
-				// This node and all nodes to the left are excluded.
 				lower = index + 1;
 			} else {
-				// entry.GetRowStart() <= row_number < entry.GetRowEnd()
 				result = index;
 				return true;
 			}
 		}
-		D_ASSERT(lower == upper);
-		D_ASSERT(lower == 0 || row_number >= nodes[lower - 1]->GetRowEnd());
-		D_ASSERT(upper == nodes.size() || row_number < nodes[upper]->GetRowStart());
 		return false;
 	}
 
-	void Verify(SegmentLock &, SegmentTreeVerifyMode mode = SegmentTreeVerifyMode::CONTIGUOUS) const {
+	void Verify(SegmentLock &) const {
 #ifdef DEBUG
-		idx_t current_rowid_end = nodes.empty() ? 0 : nodes[0]->GetRowStart();
+		idx_t base_start = nodes.empty() ? 0 : nodes[0]->GetRowStart();
 		for (idx_t i = 0; i < nodes.size(); i++) {
-			if (mode == SegmentTreeVerifyMode::NON_OVERLAPPING) {
-				D_ASSERT(nodes[i]->GetRowStart() >= current_rowid_end);
-			} else {
-				D_ASSERT(nodes[i]->GetRowStart() == current_rowid_end);
-			}
-			current_rowid_end = nodes[i]->GetRowStart() + nodes[i]->GetCount();
+			D_ASSERT(nodes[i]->GetRowStart() == base_start);
+			base_start += nodes[i]->GetCount();
 		}
 #endif
 	}
-	void Verify(SegmentTreeVerifyMode mode = SegmentTreeVerifyMode::CONTIGUOUS) {
+	void Verify() {
 #ifdef DEBUG
 		auto l = Lock();
-		Verify(l, mode);
+		Verify(l);
 #endif
 	}
 
@@ -343,8 +325,8 @@ protected:
 	mutable atomic<bool> finished_loading;
 
 	//! Load the next segment - only used when lazily loading
-	virtual optional<LoadedSegment<T>> LoadSegment() const {
-		return nullopt;
+	virtual shared_ptr<T> LoadSegment() const {
+		return nullptr;
 	}
 
 	optional_ptr<SegmentNode<T>> GetRootSegmentInternal() const {
@@ -461,7 +443,7 @@ private:
 		}
 		auto result = LoadSegment();
 		if (result) {
-			AppendSegmentInternal(l, std::move(result->segment), result->row_start);
+			AppendSegmentInternal(l, std::move(result));
 			return true;
 		}
 		return false;

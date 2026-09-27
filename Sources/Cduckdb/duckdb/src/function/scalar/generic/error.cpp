@@ -7,12 +7,17 @@ namespace duckdb {
 namespace {
 
 static void ErrorFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	for (auto entry : args.data[0].Values<string_t>()) {
-		if (!entry.IsValid()) {
-			FlatVector::SetNull(result, entry.GetIndex(), true);
+	UnifiedVectorFormat vdata;
+	args.data[0].ToUnifiedFormat(args.size(), vdata);
+
+	auto strings = UnifiedVectorFormat::GetData<string_t>(vdata);
+	for (idx_t i = 0; i < args.size(); i++) {
+		auto idx = vdata.sel->get_index(i);
+		if (!vdata.validity.RowIsValid(idx)) {
+			FlatVector::SetNull(result, i, true);
 			continue;
 		}
-		throw InvalidInputException(entry.GetValue().GetString());
+		throw InvalidInputException(strings[idx].GetString());
 	}
 }
 

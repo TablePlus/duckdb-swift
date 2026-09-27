@@ -34,7 +34,7 @@ public:
 
 	const vector<ColumnDefinition> &Columns() override;
 	string ToString(idx_t depth) override;
-	Identifier GetAlias() override;
+	string GetAlias() override;
 
 private:
 	unique_ptr<SelectStatement> GetSelectStatement();

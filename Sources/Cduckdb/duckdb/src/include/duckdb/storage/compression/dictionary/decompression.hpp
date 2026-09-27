@@ -25,8 +25,6 @@ public:
 private:
 	string_t FetchStringFromDict(int32_t dict_offset, uint16_t string_len);
 	uint16_t GetStringLength(sel_t index);
-	void ValidateDictionaryIndex(sel_t index);
-	void ValidateDictionaryOffset(uint32_t dict_offset);
 
 public:
 	BufferHandle owned_handle;
@@ -43,7 +41,7 @@ public:
 	uint32_t *index_buffer_ptr;
 	uint32_t index_buffer_count;
 
-	buffer_ptr<DictionaryEntry> dictionary;
+	buffer_ptr<VectorChildBuffer> dictionary;
 	idx_t dictionary_size;
 	StringDictionaryContainer dict;
 	idx_t block_size;

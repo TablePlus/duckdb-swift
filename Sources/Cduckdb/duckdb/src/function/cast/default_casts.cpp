@@ -1,7 +1,3 @@
-#include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/map_vector.hpp"
-#include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/function/cast/default_casts.hpp"
 
 #include "duckdb/common/likely.hpp"
@@ -45,7 +41,7 @@ void HandleCastError::AssignError(const string &error_message, string *error_mes
                                   optional_ptr<const Expression> cast_source, optional_idx error_location) {
 	string column;
 	if (cast_source && cast_source->HasAlias()) {
-		column = " when casting from source column " + cast_source->GetAlias();
+		column = " when casting from source column " + cast_source->alias;
 	}
 	if (!error_message_ptr) {
 		throw ConversionException(error_location, error_message + column);
@@ -58,11 +54,12 @@ void HandleCastError::AssignError(const string &error_message, string *error_mes
 // NULL cast only works if all values in source are NULL, otherwise an unimplemented cast exception is thrown
 bool DefaultCasts::TryVectorNullCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
 	bool success = true;
-	if (VectorOperations::HasNotNull(source)) {
+	if (VectorOperations::HasNotNull(source, count)) {
 		HandleCastError::AssignError(TryCast::UnimplementedCastMessage(source.GetType(), result.GetType()), parameters);
 		success = false;
 	}
-	ConstantVector::SetNull(result, count_t(count));
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::SetNull(result, true);
 	return success;
 }
 
@@ -71,13 +68,19 @@ bool DefaultCasts::ReinterpretCast(Vector &source, Vector &result, idx_t count, 
 	return true;
 }
 
-bool BoundCastInfo::IsNopCast() const {
-	return function == DefaultCasts::NopCast;
+static bool AggregateStateToBlobCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	if (result.GetType().id() != LogicalTypeId::BLOB) {
+		throw TypeMismatchException(source.GetType(), result.GetType(),
+		                            "Cannot cast AGGREGATE_STATE to anything but BLOB");
+	}
+	result.Reinterpret(source);
+	return true;
 }
 
 static bool NullTypeCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
 	// cast a NULL to another type, just copy the properties and change the type
-	ConstantVector::SetNull(result, count_t(count));
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::SetNull(result, true);
 	return true;
 }
 
@@ -129,8 +132,6 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 		return TimestampCastSwitch(input, source, target);
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return TimestampTzCastSwitch(input, source, target);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TimestampTzNsCastSwitch(input, source, target);
 	case LogicalTypeId::TIMESTAMP_NS:
 		return TimestampNsCastSwitch(input, source, target);
 	case LogicalTypeId::TIMESTAMP_MS:
@@ -150,11 +151,7 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 	case LogicalTypeId::MAP:
 		return MapCastSwitch(input, source, target);
 	case LogicalTypeId::STRUCT:
-		// an unnamed STRUCT (e.g. from variant shredding with empty keys) is cast positionally, like a TUPLE
-		return StructType::IsUnnamed(source) ? TupleCastSwitch(input, source, target)
-		                                     : StructCastSwitch(input, source, target);
-	case LogicalTypeId::TUPLE:
-		return TupleCastSwitch(input, source, target);
+		return StructCastSwitch(input, source, target);
 	case LogicalTypeId::LIST:
 		return ListCastSwitch(input, source, target);
 	case LogicalTypeId::UNION:
@@ -171,6 +168,8 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 		return TypeCastSwitch(input, source, target);
 	case LogicalTypeId::BIGNUM:
 		return BignumCastSwitch(input, source, target);
+	case LogicalTypeId::AGGREGATE_STATE:
+		return AggregateStateToBlobCast;
 	default:
 		return nullptr;
 	}

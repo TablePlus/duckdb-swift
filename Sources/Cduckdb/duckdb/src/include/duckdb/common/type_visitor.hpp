@@ -35,16 +35,6 @@ inline LogicalType TypeVisitor::VisitReplace(const LogicalType &type, F &&func) 
 		}
 		return func(LogicalType::STRUCT(children));
 	}
-	case LogicalTypeId::TUPLE: {
-		if (!type.AuxInfo()) {
-			return func(type);
-		}
-		auto children = StructType::GetChildTypes(type);
-		for (auto &child : children) {
-			child.second = VisitReplace(child.second, func);
-		}
-		return func(LogicalType::TUPLE(children));
-	}
 	case LogicalTypeId::UNION: {
 		if (!type.AuxInfo()) {
 			return func(type);
@@ -88,8 +78,7 @@ inline bool TypeVisitor::Contains(const LogicalType &type, F &&predicate) {
 		return true;
 	}
 	switch (type.id()) {
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		if (!type.AuxInfo()) {
 			return false;
 		}

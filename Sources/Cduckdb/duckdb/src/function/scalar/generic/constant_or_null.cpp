@@ -27,16 +27,16 @@ public:
 
 static void ConstantOrNullFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &info = func_expr.BindInfo()->Cast<ConstantOrNullBindData>();
-	result.Reference(info.value, count_t(args.size()));
+	auto &info = func_expr.bind_info->Cast<ConstantOrNullBindData>();
+	result.Reference(info.value);
 	for (idx_t idx = 1; idx < args.ColumnCount(); idx++) {
 		switch (args.data[idx].GetVectorType()) {
 		case VectorType::FLAT_VECTOR: {
-			auto &input_mask = FlatVector::ValidityMutable(args.data[idx]);
-			if (input_mask.CanHaveNull()) {
+			auto &input_mask = FlatVector::Validity(args.data[idx]);
+			if (!input_mask.AllValid()) {
 				// there are null values: need to merge them into the result
-				result.Flatten();
-				auto &result_mask = FlatVector::ValidityMutable(result);
+				result.Flatten(args.size());
+				auto &result_mask = FlatVector::Validity(result);
 				result_mask.EnsureWritable();
 				result_mask.Combine(input_mask, args.size());
 			}
@@ -45,21 +45,23 @@ static void ConstantOrNullFunction(DataChunk &args, ExpressionState &state, Vect
 		case VectorType::CONSTANT_VECTOR: {
 			if (ConstantVector::IsNull(args.data[idx])) {
 				// input is constant null, return constant null
+				result.SetVectorType(VectorType::CONSTANT_VECTOR);
 				auto &result_mask = ConstantVector::Validity(result);
 				auto &input_mask = ConstantVector::Validity(args.data[idx]);
 				result_mask.Initialize(input_mask);
-				ConstantVector::SetNull(result, count_t(args.size()));
+				ConstantVector::SetNull(result, true);
 				return;
 			}
 			break;
 		}
 		default: {
-			auto entries = args.data[idx].Validity();
-			if (entries.CanHaveNull()) {
-				result.Flatten();
-				auto &result_mask = FlatVector::ValidityMutable(result);
+			UnifiedVectorFormat vdata;
+			args.data[idx].ToUnifiedFormat(args.size(), vdata);
+			if (!vdata.validity.AllValid()) {
+				result.Flatten(args.size());
+				auto &result_mask = FlatVector::Validity(result);
 				for (idx_t i = 0; i < args.size(); i++) {
-					if (!entries.IsValid(i)) {
+					if (!vdata.validity.RowIsValid(vdata.sel->get_index(i))) {
 						result_mask.SetInvalid(i);
 					}
 				}
@@ -70,13 +72,17 @@ static void ConstantOrNullFunction(DataChunk &args, ExpressionState &state, Vect
 	}
 }
 
-unique_ptr<FunctionData> ConstantOrNullBind(BindScalarFunctionInput &input) {
-	auto &arguments = input.GetArguments();
-	auto &function = input.GetBoundFunction();
-
-	auto value = input.GetConstant(0);
+unique_ptr<FunctionData> ConstantOrNullBind(ClientContext &context, ScalarFunction &bound_function,
+                                            vector<unique_ptr<Expression>> &arguments) {
+	if (arguments[0]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+	if (!arguments[0]->IsFoldable()) {
+		throw BinderException("ConstantOrNull requires a constant input");
+	}
 	D_ASSERT(arguments.size() >= 2);
-	function.SetReturnType(arguments[0]->GetReturnType());
+	auto value = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
+	bound_function.SetReturnType(arguments[0]->return_type);
 	return make_uniq<ConstantOrNullBindData>(std::move(value));
 }
 
@@ -87,20 +93,20 @@ unique_ptr<FunctionData> ConstantOrNull::Bind(Value value) {
 }
 
 bool ConstantOrNull::IsConstantOrNull(BoundFunctionExpression &expr, const Value &val) {
-	if (expr.Function().GetName() != "constant_or_null") {
+	if (expr.function.name != "constant_or_null") {
 		return false;
 	}
-	D_ASSERT(expr.BindInfo());
-	auto &bind_data = expr.BindInfo()->Cast<ConstantOrNullBindData>();
+	D_ASSERT(expr.bind_info);
+	auto &bind_data = expr.bind_info->Cast<ConstantOrNullBindData>();
 	D_ASSERT(bind_data.value.type() == val.type());
 	return bind_data.value == val;
 }
 
 ScalarFunction ConstantOrNullFun::GetFunction() {
-	auto fun = ScalarFunction("constant_or_null", {{"arg1", LogicalType::ANY}, {"arg2", LogicalType::ANY}},
-	                          LogicalType::ANY, ConstantOrNullFunction);
+	auto fun = ScalarFunction("constant_or_null", {LogicalType::ANY, LogicalType::ANY}, LogicalType::ANY,
+	                          ConstantOrNullFunction);
 	fun.SetBindCallback(ConstantOrNullBind);
-	fun.SetVarArgs(LogicalType::ANY);
+	fun.varargs = LogicalType::ANY;
 	return fun;
 }
 

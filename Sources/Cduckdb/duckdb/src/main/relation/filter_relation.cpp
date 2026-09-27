@@ -41,7 +41,7 @@ unique_ptr<QueryNode> FilterRelation::GetQueryNode() {
 	}
 }
 
-Identifier FilterRelation::GetAlias() {
+string FilterRelation::GetAlias() {
 	return child->GetAlias();
 }
 

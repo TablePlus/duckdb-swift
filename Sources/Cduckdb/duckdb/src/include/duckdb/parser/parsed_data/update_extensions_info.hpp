@@ -10,7 +10,6 @@
 
 #include "duckdb/parser/parsed_data/parse_info.hpp"
 
-#include "duckdb/common/identifier.hpp"
 namespace duckdb {
 
 struct UpdateExtensionsInfo : public ParseInfo {
@@ -21,7 +20,7 @@ public:
 	UpdateExtensionsInfo() : ParseInfo(TYPE) {
 	}
 
-	vector<Identifier> extensions_to_update;
+	vector<string> extensions_to_update;
 
 public:
 	unique_ptr<UpdateExtensionsInfo> Copy() const {

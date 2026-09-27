@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "duckdb/common/prefetched_file_data.hpp"
 #include "duckdb/common/helper.hpp"
+#include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/table_io_manager.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/storage/database_size.hpp"
@@ -17,11 +17,9 @@
 #include "duckdb/storage/storage_options.hpp"
 
 namespace duckdb {
-class ActiveCheckpointWrapper;
 class BlockManager;
 class Catalog;
 class CheckpointWriter;
-class DataTable;
 class DatabaseInstance;
 class TransactionManager;
 class TableCatalogEntry;
@@ -63,10 +61,6 @@ public:
 	//! or the file's block allocation size, if it is an existing database.
 	void Initialize(QueryContext context);
 
-	static bool TargetAtLeastVersion(StorageVersion version, idx_t target_version);
-	static bool TargetAtLeastVersion(StorageVersion version, StorageVersion target_version);
-	static bool IsPriorToVersion(StorageVersion version, StorageVersion target_version);
-
 	DatabaseInstance &GetDatabase();
 	AttachedDatabase &GetAttached() const {
 		return db;
@@ -84,12 +78,11 @@ public:
 	//! Gets the WAL of the StorageManager, or nullptr, if there is no WAL.
 	optional_ptr<WriteAheadLog> GetWAL();
 	//! Write that we started a checkpoint to the WAL if there is one - returns whether or not there is a WAL
-	bool WALStartCheckpoint(MetaBlockPointer meta_block, CheckpointOptions &options,
-	                        ActiveCheckpointWrapper &active_checkpoint);
+	bool WALStartCheckpoint(MetaBlockPointer meta_block, CheckpointOptions &options);
 	//! Finishes a checkpoint
-	void WALFinishCheckpoint(unique_lock<mutex> &wal_lock);
+	void WALFinishCheckpoint(lock_guard<mutex> &wal_lock);
 	// Get the WAL lock
-	unique_lock<mutex> GetWALLock();
+	unique_ptr<lock_guard<mutex>> GetWALLock();
 
 	//! Returns the database file path
 	string GetDBPath() const {
@@ -116,22 +109,15 @@ public:
 	virtual BlockManager &GetBlockManager() = 0;
 	virtual void Destroy();
 
-	void SetStorageVersion(const StorageVersion &version) {
+	void SetStorageVersion(idx_t version) {
 		storage_version = version;
 	}
-	StorageVersion GetLatestStorageVersion() const {
-		return StorageVersion::LATEST;
-	}
-	StorageVersion GetStorageVersion() const {
-		D_ASSERT(HasStorageVersion());
-		return storage_version;
-	}
 	bool HasStorageVersion() const {
-		return storage_version != StorageVersion::INVALID;
+		return storage_version.IsValid();
 	}
-	string_t GetDuckDBVersionString() const {
+	idx_t GetStorageVersion() const {
 		D_ASSERT(HasStorageVersion());
-		return StorageVersionInfo::GetStorageVersionString(storage_version);
+		return storage_version.GetIndex();
 	}
 	bool CompressionIsEnabled() const {
 		return storage_options.compress_in_memory == CompressInMemory::COMPRESS;
@@ -178,16 +164,14 @@ protected:
 	//! When loading a database, we do not yet set the wal-field. Therefore, GetWriteAheadLog must
 	//! return nullptr when loading a database
 	bool load_complete = false;
-	//! The storage compatibility version when reading and writing from this database
-	StorageVersion storage_version;
+	//! The serialization compatibility version when reading and writing from this database
+	optional_idx storage_version;
 	//! Estimated size of changes for determining automatic checkpointing on in-memory databases and databases without a
 	//! WAL.
 	atomic<idx_t> wal_size;
 	atomic<idx_t> wal_entries_count;
 	//! Storage options passed in through configuration
 	StorageOptions storage_options;
-	//! Header prefetched during file-type detection, consumed by LoadDatabase. Empty unless a DuckDB file via ATTACH.
-	PrefetchedFileData prefetched_file;
 
 public:
 	template <class TARGET>

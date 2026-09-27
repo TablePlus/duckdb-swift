@@ -38,16 +38,15 @@ void DuckDBOptimizersFunction(ClientContext &context, TableFunctionInput &data_p
 	// start returning values
 	// either fill up the chunk or return all the remaining columns
 	idx_t count = 0;
-
-	// name, LogicalType::VARCHAR
-	auto &name = output.data[0];
-
 	while (data.offset < data.optimizers.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &entry = data.optimizers[data.offset++];
 
-		name.Append(Value(entry));
+		// return values:
+		// name, LogicalType::VARCHAR
+		output.SetValue(0, count, Value(entry));
 		count++;
 	}
+	output.SetCardinality(count);
 }
 
 void DuckDBOptimizersFun::RegisterFunction(BuiltinFunctions &set) {

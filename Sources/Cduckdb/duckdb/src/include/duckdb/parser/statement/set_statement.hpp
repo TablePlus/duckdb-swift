@@ -20,18 +20,18 @@ public:
 	static constexpr const StatementType TYPE = StatementType::SET_STATEMENT;
 
 protected:
-	SetStatement(Identifier name_p, SetScope scope_p, SetType type_p);
+	SetStatement(string name_p, SetScope scope_p, SetType type_p);
 	SetStatement(const SetStatement &other) = default;
 
 public:
-	Identifier name;
+	string name;
 	SetScope scope;
 	SetType set_type;
 };
 
 class SetVariableStatement : public SetStatement {
 public:
-	SetVariableStatement(Identifier name_p, unique_ptr<ParsedExpression> value_p, SetScope scope_p);
+	SetVariableStatement(string name_p, unique_ptr<ParsedExpression> value_p, SetScope scope_p);
 
 protected:
 	SetVariableStatement(const SetVariableStatement &other);
@@ -46,7 +46,7 @@ public:
 
 class ResetVariableStatement : public SetStatement {
 public:
-	ResetVariableStatement(Identifier name_p, SetScope scope_p);
+	ResetVariableStatement(std::string name_p, SetScope scope_p);
 
 protected:
 	ResetVariableStatement(const ResetVariableStatement &other) = default;

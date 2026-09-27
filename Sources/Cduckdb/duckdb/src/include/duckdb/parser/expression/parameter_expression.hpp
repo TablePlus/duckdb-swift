@@ -34,13 +34,9 @@ public:
 public:
 	ParameterExpression();
 
+	string identifier;
+
 public:
-	const duckdb::Identifier &Identifier() const {
-		return identifier;
-	}
-	duckdb::Identifier &IdentifierMutable() {
-		return identifier;
-	}
 	bool IsScalar() const override {
 		return true;
 	}
@@ -50,15 +46,12 @@ public:
 
 	string ToString() const override;
 
-	bool Equals(const ParsedExpression &other) const override;
+	static bool Equal(const ParameterExpression &a, const ParameterExpression &b);
 
 	unique_ptr<ParsedExpression> Copy() const override;
 	hash_t Hash() const override;
 
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<ParsedExpression> Deserialize(Deserializer &deserializer);
-
-private:
-	duckdb::Identifier identifier;
 };
 } // namespace duckdb

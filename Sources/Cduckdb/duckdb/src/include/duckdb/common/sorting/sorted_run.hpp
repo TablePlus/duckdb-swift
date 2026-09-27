@@ -25,12 +25,13 @@ public:
 	SortedRunScanState(ClientContext &context, const Sort &sort);
 
 public:
-	void Scan(const SortedRun &sorted_run, const Vector &sort_key_pointers, DataChunk &chunk);
+	void Scan(const SortedRun &sorted_run, const Vector &sort_key_pointers, const idx_t &count, DataChunk &chunk);
 	void Clear();
 
 private:
 	template <SortKeyType sort_key_type>
-	void TemplatedScan(const SortedRun &sorted_run, const Vector &sort_key_pointers, DataChunk &chunk);
+	void TemplatedScan(const SortedRun &sorted_run, const Vector &sort_key_pointers, const idx_t &count,
+	                   DataChunk &chunk);
 
 private:
 	const Sort &sort;

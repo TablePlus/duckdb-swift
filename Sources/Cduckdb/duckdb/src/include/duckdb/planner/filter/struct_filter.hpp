@@ -9,27 +9,32 @@
 #pragma once
 
 #include "duckdb/planner/table_filter.hpp"
+#include "duckdb/common/types/value.hpp"
+#include "duckdb/common/enums/expression_type.hpp"
 
 namespace duckdb {
 
-//! DEPRECATED - only preserved for backwards-compatible deserialization and expression conversion
-class LegacyStructFilter : public TableFilter {
+class StructFilter : public TableFilter {
 public:
-	static constexpr const TableFilterType TYPE = TableFilterType::LEGACY_STRUCT_EXTRACT;
+	static constexpr const TableFilterType TYPE = TableFilterType::STRUCT_EXTRACT;
 
 public:
-	LegacyStructFilter(idx_t child_idx, Identifier child_name, unique_ptr<TableFilter> child_filter);
+	StructFilter(idx_t child_idx, string child_name, unique_ptr<TableFilter> child_filter);
 
 	//! The field index to filter on
 	idx_t child_idx;
 
 	//! The field name to filter on
-	Identifier child_name;
+	string child_name;
 
 	//! The child filter
 	unique_ptr<TableFilter> child_filter;
 
 public:
+	FilterPropagateResult CheckStatistics(BaseStatistics &stats) const override;
+	string ToString(const string &column_name) const override;
+	bool Equals(const TableFilter &other) const override;
+	unique_ptr<TableFilter> Copy() const override;
 	unique_ptr<Expression> ToExpression(const Expression &column) const override;
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<TableFilter> Deserialize(Deserializer &deserializer);

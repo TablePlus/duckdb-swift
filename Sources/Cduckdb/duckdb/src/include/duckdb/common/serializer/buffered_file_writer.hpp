@@ -10,7 +10,6 @@
 
 #include "duckdb/common/serializer/write_stream.hpp"
 #include "duckdb/common/file_system.hpp"
-#include "duckdb/common/query_context.hpp"
 
 namespace duckdb {
 
@@ -21,10 +20,8 @@ public:
 	static constexpr FileOpenFlags DEFAULT_OPEN_FLAGS = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE;
 
 	//! Serializes to a buffer allocated by the serializer, will expand when
-	//! writing past the initial threshold. The optional QueryContext is used to attribute
-	//! the written bytes to the query's I/O metrics.
-	DUCKDB_API BufferedFileWriter(FileSystem &fs, const string &path, FileOpenFlags open_flags = DEFAULT_OPEN_FLAGS,
-	                              QueryContext context = QueryContext());
+	//! writing past the initial threshold
+	DUCKDB_API BufferedFileWriter(FileSystem &fs, const string &path, FileOpenFlags open_flags = DEFAULT_OPEN_FLAGS);
 
 	FileSystem &fs;
 	string path;
@@ -32,7 +29,6 @@ public:
 	idx_t offset;
 	idx_t total_written;
 	unique_ptr<FileHandle> handle;
-	QueryContext context;
 
 public:
 	DUCKDB_API void WriteData(const_data_ptr_t buffer, idx_t write_size) override;

@@ -1,5 +1,4 @@
 #include "duckdb/common/types/blob.hpp"
-#include "duckdb/function/cast/default_casts.hpp"
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"

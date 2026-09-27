@@ -1,7 +1,3 @@
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/list_vector.hpp"
-#include "duckdb/common/vector/string_vector.hpp"
-#include "duckdb/common/vector/variant_vector.hpp"
 #include "duckdb/function/scalar/regexp.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -93,9 +89,6 @@ void VariantNormalizer::VisitTimestampNanos(timestamp_ns_t val, VariantNormalize
 void VariantNormalizer::VisitTimestampTZ(timestamp_tz_t val, VariantNormalizerState &state) {
 	VisitInteger(val, state);
 }
-void VariantNormalizer::VisitTimestampTZNanos(timestamp_tz_ns_t val, VariantNormalizerState &state) {
-	VisitInteger(val, state);
-}
 
 void VariantNormalizer::VisitString(const string_t &str, VariantNormalizerState &state) {
 	auto length = str.GetSize();
@@ -184,19 +177,18 @@ void VariantNormalizer::VisitDefault(VariantLogicalType type_id, const_data_ptr_
 	throw InternalException("VariantLogicalType(%s) not handled", EnumUtil::ToString(type_id));
 }
 
-void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
+void VariantNormalizer::Normalize(Vector &variant_vec, Vector &result, idx_t count) {
 	D_ASSERT(variant_vec.GetType() == LogicalType::VARIANT());
-	const idx_t count = variant_vec.size();
 
 	//! Set up the access helper for the source VARIANT
 	RecursiveUnifiedVectorFormat source_format;
-	Vector::RecursiveToUnifiedFormat(variant_vec, source_format);
+	Vector::RecursiveToUnifiedFormat(variant_vec, count, source_format);
 	UnifiedVariantVectorData variant(source_format);
 
 	//! Take the original sizes of the lists, the result will be similar size, never bigger
-	auto original_keys_size = ListVector::GetTotalEntryCount(VariantVector::GetKeys(variant_vec));
-	auto original_children_size = ListVector::GetTotalEntryCount(VariantVector::GetChildren(variant_vec));
-	auto original_values_size = ListVector::GetTotalEntryCount(VariantVector::GetValues(variant_vec));
+	auto original_keys_size = ListVector::GetListSize(VariantVector::GetKeys(variant_vec));
+	auto original_children_size = ListVector::GetListSize(VariantVector::GetChildren(variant_vec));
+	auto original_values_size = ListVector::GetListSize(VariantVector::GetValues(variant_vec));
 
 	auto &keys = VariantVector::GetKeys(result);
 	auto &children = VariantVector::GetChildren(result);
@@ -211,12 +203,13 @@ void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
 	ListVector::SetListSize(values, 0);
 
 	//! Initialize the dictionary
-	auto &keys_entry = ListVector::GetChildMutable(keys);
-	OrderedOwningStringMap<uint32_t> dictionary(StringVector::GetStringAllocator(keys_entry));
+	auto &keys_entry = ListVector::GetEntry(keys);
+	OrderedOwningStringMap<uint32_t> dictionary(StringVector::GetStringBuffer(keys_entry).GetStringAllocator());
 
 	VariantVectorData variant_data(result);
 	SelectionVector keys_selvec;
 	keys_selvec.Initialize(original_keys_size);
+
 	for (idx_t i = 0; i < count; i++) {
 		if (!variant.RowIsValid(i)) {
 			FlatVector::SetNull(result, i, true);
@@ -252,23 +245,24 @@ void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
 
 	VariantUtils::FinalizeVariantKeys(result, dictionary, keys_selvec, ListVector::GetListSize(keys));
 	keys_entry.Slice(keys_selvec, ListVector::GetListSize(keys));
+
+	if (variant_vec.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+	result.Verify(count);
 }
 
 static void VariantNormalizeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
-	D_ASSERT(input.ColumnCount() == 1);
-	const auto &variant_vec = input.data[0];
-	VariantNormalizer::Normalize(variant_vec, result);
-}
+	auto count = input.size();
 
-static unique_ptr<BaseStatistics> VariantNormalizeStats(ClientContext &context, FunctionStatisticsInput &input) {
-	// variant_normalize re-encodes the VARIANT in a canonical binary form, but does not change any values
-	return input.child_stats[0].ToUnique();
+	D_ASSERT(input.ColumnCount() == 1);
+	auto &variant_vec = input.data[0];
+	VariantNormalizer::Normalize(variant_vec, result, count);
 }
 
 ScalarFunction VariantNormalizeFun::GetFunction() {
 	auto variant_type = LogicalType::VARIANT();
-	return ScalarFunction("variant_normalize", {variant_type}, variant_type, VariantNormalizeFunction, nullptr,
-	                      VariantNormalizeStats);
+	return ScalarFunction("variant_normalize", {variant_type}, variant_type, VariantNormalizeFunction);
 }
 
 } // namespace duckdb

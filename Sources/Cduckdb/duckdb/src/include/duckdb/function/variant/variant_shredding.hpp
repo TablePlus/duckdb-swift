@@ -47,14 +47,12 @@ public:
 	const VariantColumnStatsData &GetColumnStats(idx_t index) const;
 
 public:
-	void Update(const Vector &input, idx_t count);
-	//! If force_partial is set, every level keeps its 'untyped_value_index' (overlay) column even when the
-	//! sampled values are fully consistent - allowing later inconsistent values to be partially shredded.
-	LogicalType GetShreddedType(bool force_partial = false) const;
+	void Update(Vector &input, idx_t count);
+	LogicalType GetShreddedType() const;
 
 private:
 	bool GetShreddedTypeInternal(const VariantColumnStatsData &column, LogicalType &out_type,
-	                             optional_idx parent_count = optional_idx(), bool force_partial = false) const;
+	                             optional_idx parent_count = optional_idx()) const;
 
 private:
 	//! Nested type analysis

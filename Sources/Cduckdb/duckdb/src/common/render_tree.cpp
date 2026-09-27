@@ -1,9 +1,7 @@
 #include "duckdb/common/render_tree.hpp"
-#include "duckdb/main/profiler/profiling_node.hpp"
 #include "duckdb/execution/operator/aggregate/physical_hash_aggregate.hpp"
 #include "duckdb/execution/operator/join/physical_delim_join.hpp"
 #include "duckdb/execution/operator/scan/physical_positional_scan.hpp"
-#include "duckdb/planner/logical_operator.hpp"
 
 namespace duckdb {
 
@@ -102,17 +100,27 @@ static unique_ptr<RenderTreeNode> CreateNode(const PipelineRenderNode &op) {
 }
 
 static unique_ptr<RenderTreeNode> CreateNode(const ProfilingNode &op) {
-	auto &info = op.GetOperatorMetrics();
-
-	auto &node_name = info.name;
-	auto result = make_uniq<RenderTreeNode>(node_name, info.GetExtraInfo());
-	if (info.total_row_groups_to_scan > 0) {
-		result->extra_text["Row Groups Scanned"] =
-		    to_string(info.row_groups_scanned) + " / " + to_string(info.total_row_groups_to_scan);
+	auto &info = op.GetProfilingInfo();
+	InsertionOrderPreservingMap<string> extra_info;
+	if (info.Enabled(info.settings, MetricType::EXTRA_INFO)) {
+		extra_info = op.GetProfilingInfo().GetMetricValue<InsertionOrderPreservingMap<string>>(MetricType::EXTRA_INFO);
 	}
-	result->extra_text[RenderTreeNode::CARDINALITY] = to_string(info.elements_returned);
-	string timing = StringUtil::Format("%.2f", info.time);
-	result->extra_text[RenderTreeNode::TIMING] = timing + "s";
+
+	string node_name = "QUERY";
+	if (op.depth > 0) {
+		node_name = info.GetMetricAsString(MetricType::OPERATOR_TYPE);
+	}
+
+	auto result = make_uniq<RenderTreeNode>(node_name, extra_info);
+	if (info.Enabled(info.settings, MetricType::OPERATOR_CARDINALITY)) {
+		auto cardinality = info.GetMetricAsString(MetricType::OPERATOR_CARDINALITY);
+		result->extra_text[RenderTreeNode::CARDINALITY] = cardinality;
+	}
+	if (info.Enabled(info.settings, MetricType::OPERATOR_TIMING)) {
+		auto value = info.metrics.at(MetricType::OPERATOR_TIMING).GetValue<double>();
+		string timing = StringUtil::Format("%.2f", value);
+		result->extra_text[RenderTreeNode::TIMING] = timing + "s";
+	}
 	return result;
 }
 

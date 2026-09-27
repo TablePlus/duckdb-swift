@@ -18,28 +18,21 @@ public:
 public:
 	DUCKDB_API explicit PositionalReferenceExpression(idx_t index);
 
+	idx_t index;
+
 public:
-	idx_t Index() const {
-		return index;
-	}
-	idx_t &IndexMutable() {
-		return index;
-	}
 	bool IsScalar() const override {
 		return false;
 	}
 
 	string ToString() const override;
 
-	bool Equals(const ParsedExpression &other) const override;
+	static bool Equal(const PositionalReferenceExpression &a, const PositionalReferenceExpression &b);
 	unique_ptr<ParsedExpression> Copy() const override;
 	hash_t Hash() const override;
 
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<ParsedExpression> Deserialize(Deserializer &deserializer);
-
-private:
-	idx_t index;
 
 private:
 	PositionalReferenceExpression();

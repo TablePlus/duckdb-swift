@@ -19,7 +19,7 @@ void QueryProgress::Restart() {
 double QueryProgress::GetPercentage() {
 	return percentage;
 }
-uint64_t QueryProgress::GetRowsProcessed() {
+uint64_t QueryProgress::GetRowsProcesseed() {
 	return rows_processed;
 }
 uint64_t QueryProgress::GetTotalRowsToProcess() {

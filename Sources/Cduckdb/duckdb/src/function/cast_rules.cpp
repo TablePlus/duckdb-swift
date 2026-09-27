@@ -30,12 +30,9 @@ static int64_t TargetTypeCost(const LogicalType &type) {
 		return 122;
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return 123;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return 124;
 	case LogicalTypeId::VARCHAR:
 		return 149;
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::UNION:
@@ -234,7 +231,6 @@ static int64_t ImplicitCastDate(const LogicalType &to) {
 	switch (to.id()) {
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::TIMESTAMP_SEC:
@@ -290,8 +286,6 @@ static int64_t ImplicitCastTimestamp(const LogicalType &to) {
 		return TargetTypeCost(to);
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return TargetTypeCost(to);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TargetTypeCost(to);
 	default:
 		return -1;
 	}
@@ -313,7 +307,6 @@ static int64_t ImplicitCastVariant(const LogicalType &to) {
 bool LogicalTypeIsValid(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::UNION:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::LIST:
@@ -333,8 +326,7 @@ bool LogicalTypeIsValid(const LogicalType &type) {
 	case LogicalTypeId::INVALID:
 	case LogicalTypeId::UNKNOWN:
 		return false;
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		auto child_count = StructType::GetChildCount(type);
 		for (idx_t i = 0; i < child_count; i++) {
 			if (!LogicalTypeIsValid(StructType::GetChildType(type, i))) {
@@ -360,26 +352,6 @@ bool LogicalTypeIsValid(const LogicalType &type) {
 	default:
 		return true;
 	}
-}
-
-int64_t ImplicitCastToUnionMember(const LogicalType &from, const LogicalType &to) {
-	// check that the union type is fully resolved.
-	if (to.AuxInfo() == nullptr) {
-		return -1;
-	}
-	// check if the union contains something castable from the source type
-	// in which case the least expensive (most specific) cast should be used
-	bool found = false;
-	auto cost = NumericLimits<int64_t>::Maximum();
-	for (idx_t i = 0; i < UnionType::GetMemberCount(to); i++) {
-		auto target_member = UnionType::GetMemberType(to, i);
-		auto target_cost = CastRules::ImplicitCast(from, target_member);
-		if (target_cost != -1) {
-			found = true;
-			cost = MinValue(cost, target_cost);
-		}
-	}
-	return found ? cost : -1;
 }
 
 int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) {
@@ -428,15 +400,8 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		// in any other case we use the casting rules of the preferred type of the literal
 		return CastRules::ImplicitCast(IntegerLiteral::GetType(from), to);
 	}
-
 	if (from.GetAlias() != to.GetAlias()) {
 		// if aliases are different, an implicit cast is not possible
-
-		// Special case: Anything can be cast to a union if the source type is a member of the union
-		if (to.id() == LogicalTypeId::UNION) {
-			return ImplicitCastToUnionMember(from, to);
-		}
-
 		return -1;
 	}
 	if (from.id() == LogicalTypeId::LIST && to.id() == LogicalTypeId::LIST) {
@@ -497,7 +462,7 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 			for (idx_t to_member_idx = 0; to_member_idx < UnionType::GetMemberCount(to); to_member_idx++) {
 				auto &to_member_name = UnionType::GetMemberName(to, to_member_idx);
 
-				if (from_member_name == to_member_name) {
+				if (StringUtil::CIEquals(from_member_name, to_member_name)) {
 					auto &from_member_type = UnionType::GetMemberType(from, from_member_idx);
 					auto &to_member_type = UnionType::GetMemberType(to, to_member_idx);
 
@@ -511,12 +476,9 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 				return -1;
 			}
 		}
-		// If not found, try casting source to member of target (below)
-		if (cost != -1) {
-			return cost;
-		}
+		return cost;
 	}
-	if (StructType::IsStruct(from) && StructType::IsStruct(to)) {
+	if (from.id() == LogicalTypeId::STRUCT && to.id() == LogicalTypeId::STRUCT) {
 		if (to.AuxInfo() == nullptr) {
 			// If this struct is not fully resolved, we'll leave it to the actual cast logic to handle it.
 			return 0;
@@ -530,11 +492,6 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 			return -1;
 		}
 
-		if (source_children.empty()) {
-			// both are empty - empty STRUCT and empty TUPLE are trivially inter-castable
-			return 0;
-		}
-
 		auto target_is_unnamed = StructType::IsUnnamed(to);
 		auto source_is_unnamed = StructType::IsUnnamed(from);
 		auto named_struct_cast = !source_is_unnamed && !target_is_unnamed;
@@ -542,7 +499,7 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		int64_t cost = -1;
 		if (named_struct_cast) {
 			// Collect the target members in a map for easy lookup
-			identifier_map_t<idx_t> target_members;
+			case_insensitive_map_t<idx_t> target_members;
 			for (idx_t target_idx = 0; target_idx < target_children.size(); target_idx++) {
 				auto &target_name = target_children[target_idx].first;
 				if (target_members.find(target_name) != target_members.end()) {
@@ -586,9 +543,26 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		// arguments match: do nothing
 		return 0;
 	}
+
 	// Special case: Anything can be cast to a union if the source type is a member of the union
 	if (to.id() == LogicalTypeId::UNION) {
-		return ImplicitCastToUnionMember(from, to);
+		// check that the union type is fully resolved.
+		if (to.AuxInfo() == nullptr) {
+			return -1;
+		}
+		// check if the union contains something castable from the source type
+		// in which case the least expensive (most specific) cast should be used
+		bool found = false;
+		auto cost = NumericLimits<int64_t>::Maximum();
+		for (idx_t i = 0; i < UnionType::GetMemberCount(to); i++) {
+			auto target_member = UnionType::GetMemberType(to, i);
+			auto target_cost = ImplicitCast(from, target_member);
+			if (target_cost != -1) {
+				found = true;
+				cost = MinValue(cost, target_cost);
+			}
+		}
+		return found ? cost : -1;
 	}
 
 	switch (from.id()) {

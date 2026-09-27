@@ -8,12 +8,13 @@
 
 #pragma once
 
-#include "duckdb/common/optional.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types/validity_mask.hpp"
 
 namespace duckdb {
+struct ValidityMask;
 
 template <class OP>
 class DateLookupCache {
@@ -27,18 +28,19 @@ public:
 		BuildCache();
 	}
 
-	//! Extracts the component, or returns nullopt if the date is infinite
-	optional<int64_t> ExtractElement(date_t date) const {
+	//! Extracts the component, or sets the validity mask to NULL if the date is infinite
+	int64_t ExtractElement(date_t date, ValidityMask &mask, idx_t idx) const {
 		if (DUCKDB_UNLIKELY(date.days < CACHE_MIN_DATE || date.days >= CACHE_MAX_DATE)) {
 			if (DUCKDB_UNLIKELY(!Value::IsFinite(date))) {
-				return nullopt;
+				mask.SetInvalid(idx);
+				return 0;
 			}
 			return OP::template Operation<date_t, int64_t>(date);
 		}
 		return cache[GetDateCacheEntry(date)];
 	}
-	optional<int64_t> ExtractElement(timestamp_t ts) const {
-		return ExtractElement(Timestamp::GetDate(ts));
+	int64_t ExtractElement(timestamp_t ts, ValidityMask &mask, idx_t idx) const {
+		return ExtractElement(Timestamp::GetDate(ts), mask, idx);
 	}
 
 private:

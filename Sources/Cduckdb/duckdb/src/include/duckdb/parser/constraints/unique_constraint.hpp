@@ -20,8 +20,8 @@ public:
 
 public:
 	DUCKDB_API UniqueConstraint(const LogicalIndex index, const bool is_primary_key);
-	DUCKDB_API UniqueConstraint(const LogicalIndex index, Identifier column_name, const bool is_primary_key);
-	DUCKDB_API UniqueConstraint(vector<Identifier> columns, const bool is_primary_key);
+	DUCKDB_API UniqueConstraint(const LogicalIndex index, string column_name, const bool is_primary_key);
+	DUCKDB_API UniqueConstraint(vector<string> columns, const bool is_primary_key);
 
 public:
 	DUCKDB_API string ToString() const override;
@@ -38,13 +38,13 @@ public:
 	//! Sets the column index of the constraint.
 	void SetIndex(const LogicalIndex new_index);
 	//! Returns a constant reference to the column names on which the constraint is defined.
-	const vector<Identifier> &GetColumnNames() const;
+	const vector<string> &GetColumnNames() const;
 	//! Returns a mutable reference to the column names on which the constraint is defined.
-	vector<Identifier> &GetColumnNamesMutable();
+	vector<string> &GetColumnNamesMutable();
 	//! Returns the column indexes on which the constraint is defined.
 	vector<LogicalIndex> GetLogicalIndexes(const ColumnList &columns) const;
 	//! Get the name of the constraint.
-	Identifier GetName(const Identifier &table_name) const;
+	string GetName(const string &table_name) const;
 
 private:
 	UniqueConstraint();
@@ -58,7 +58,7 @@ public:
 	//! The indexed column of the constraint. Only used for single-column constraints, invalid otherwise.
 	LogicalIndex index;
 	//! The names of the columns on which this constraint is defined. Only set if the index field is not set.
-	vector<Identifier> columns;
+	vector<string> columns;
 	//! Whether this is a PRIMARY KEY constraint, or a UNIQUE constraint.
 	bool is_primary_key;
 };

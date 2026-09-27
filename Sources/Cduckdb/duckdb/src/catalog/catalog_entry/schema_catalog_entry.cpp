@@ -11,7 +11,7 @@
 namespace duckdb {
 
 SchemaCatalogEntry::SchemaCatalogEntry(Catalog &catalog, CreateSchemaInfo &info)
-    : InCatalogEntry(CatalogType::SCHEMA_ENTRY, catalog, info.SchemaName()) {
+    : InCatalogEntry(CatalogType::SCHEMA_ENTRY, catalog, info.schema) {
 	this->internal = info.internal;
 	this->comment = info.comment;
 	this->tags = info.tags;
@@ -30,18 +30,18 @@ SimilarCatalogEntry SchemaCatalogEntry::GetSimilarEntry(CatalogTransaction trans
                                                         const EntryLookupInfo &lookup_info) {
 	SimilarCatalogEntry result;
 	Scan(transaction.GetContext(), lookup_info.GetCatalogType(), [&](CatalogEntry &entry) {
-		auto entry_score = StringUtil::SimilarityRating(entry.name.GetIdentifierName(), lookup_info.GetEntryName());
+		auto entry_score = StringUtil::SimilarityRating(entry.name, lookup_info.GetEntryName());
 		if (entry_score > result.score) {
 			result.score = entry_score;
-			result.name = Identifier(entry.name.GetIdentifierName());
+			result.name = entry.name;
 		}
 	});
 	return result;
 }
 
 optional_ptr<CatalogEntry> SchemaCatalogEntry::GetEntry(CatalogTransaction transaction, CatalogType type,
-                                                        const Identifier &name) {
-	EntryLookupInfo lookup_info(type, QualifiedName(name));
+                                                        const string &name) {
+	EntryLookupInfo lookup_info(type, name);
 	return LookupEntry(transaction, lookup_info);
 }
 
@@ -59,20 +59,9 @@ CatalogSet::EntryLookup SchemaCatalogEntry::LookupEntryDetailed(CatalogTransacti
 	return result;
 }
 
-vector<Identifier> SchemaCatalogEntry::GetSchemaPath() const {
-	vector<Identifier> path;
-	optional_ptr<const SchemaCatalogEntry> schema = this;
-	while (schema) {
-		path.push_back(schema->name);
-		schema = schema->GetParentSchema().get();
-	}
-	std::reverse(path.begin(), path.end());
-	return path;
-}
-
 unique_ptr<CreateInfo> SchemaCatalogEntry::GetInfo() const {
 	auto result = make_uniq<CreateSchemaInfo>();
-	result->SetQualifiedName(QualifiedName({name}, Identifier()));
+	result->schema = name;
 	result->comment = comment;
 	result->tags = tags;
 	return std::move(result);

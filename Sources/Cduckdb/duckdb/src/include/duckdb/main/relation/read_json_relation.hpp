@@ -20,7 +20,7 @@ public:
 	string alias;
 
 public:
-	Identifier GetAlias() override;
+	string GetAlias() override;
 
 private:
 	void InitializeAlias(const vector<string> &input);

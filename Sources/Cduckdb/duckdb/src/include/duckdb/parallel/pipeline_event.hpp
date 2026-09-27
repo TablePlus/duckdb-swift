@@ -19,7 +19,6 @@ public:
 
 public:
 	void Schedule() override;
-	bool AutoFinishWithoutTasks() const override;
 	void FinishEvent() override;
 };
 

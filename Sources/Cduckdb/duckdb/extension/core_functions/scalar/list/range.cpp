@@ -1,7 +1,8 @@
-#include "duckdb/common/vector/flat_vector.hpp"
 #include "core_functions/scalar/list_functions.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 
 namespace duckdb {
 
@@ -67,7 +68,7 @@ struct TimestampRangeInfo {
 			return 0;
 		}
 		// We don't allow infinite bounds because they generate errors or infinite loops
-		if (!start_value.IsFinite() || !end_value.IsFinite()) {
+		if (!Timestamp::IsFinite(start_value) || !Timestamp::IsFinite(end_value)) {
 			throw InvalidInputException("Interval infinite bounds not supported");
 		}
 
@@ -115,16 +116,16 @@ public:
 	explicit RangeInfoStruct(DataChunk &args_p) : args(args_p) {
 		switch (args.ColumnCount()) {
 		case 1:
-			args.data[0].ToUnifiedFormat(vdata[0]);
+			args.data[0].ToUnifiedFormat(args.size(), vdata[0]);
 			break;
 		case 2:
-			args.data[0].ToUnifiedFormat(vdata[0]);
-			args.data[1].ToUnifiedFormat(vdata[1]);
+			args.data[0].ToUnifiedFormat(args.size(), vdata[0]);
+			args.data[1].ToUnifiedFormat(args.size(), vdata[1]);
 			break;
 		case 3:
-			args.data[0].ToUnifiedFormat(vdata[0]);
-			args.data[1].ToUnifiedFormat(vdata[1]);
-			args.data[2].ToUnifiedFormat(vdata[2]);
+			args.data[0].ToUnifiedFormat(args.size(), vdata[0]);
+			args.data[1].ToUnifiedFormat(args.size(), vdata[1]);
+			args.data[2].ToUnifiedFormat(args.size(), vdata[2]);
 			break;
 		default:
 			throw InternalException("Unsupported number of parameters for range");
@@ -193,27 +194,51 @@ void ListRangeFunction(DataChunk &args, ExpressionState &state, Vector &result) 
 	D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
 
 	RangeInfoStruct<OP, INCLUSIVE_BOUND> info(args);
-	auto args_size = args.size();
-	auto list_writer = FlatVector::Writer<VectorListType<typename OP::TYPE>>(result, args_size);
-	for (idx_t i = 0; i < args_size; i++) {
-		if (!info.RowIsValid(i)) {
-			list_writer.WriteNull();
-			continue;
-		}
-		typename OP::TYPE start_value = info.StartListValue(i);
-		typename OP::INCREMENT_TYPE increment = info.ListIncrementValue(i);
-		const auto length = info.ListLength(i);
-
-		typename OP::TYPE range_value = start_value;
-		bool seen_value = false;
-		for (auto &child_writer : list_writer.WriteList(length)) {
-			if (seen_value) {
-				OP::Increment(range_value, increment);
-			}
-			child_writer.WriteValue(range_value);
-			seen_value = true;
+	idx_t args_size = 1;
+	auto result_type = VectorType::CONSTANT_VECTOR;
+	for (idx_t i = 0; i < args.ColumnCount(); i++) {
+		if (args.data[i].GetVectorType() != VectorType::CONSTANT_VECTOR) {
+			args_size = args.size();
+			result_type = VectorType::FLAT_VECTOR;
+			break;
 		}
 	}
+	auto list_data = FlatVector::GetData<list_entry_t>(result);
+	auto &result_validity = FlatVector::Validity(result);
+	uint64_t total_size = 0;
+	for (idx_t i = 0; i < args_size; i++) {
+		if (!info.RowIsValid(i)) {
+			result_validity.SetInvalid(i);
+			list_data[i].offset = total_size;
+			list_data[i].length = 0;
+		} else {
+			list_data[i].offset = total_size;
+			list_data[i].length = info.ListLength(i);
+			total_size += list_data[i].length;
+		}
+	}
+
+	// now construct the child vector of the list
+	ListVector::Reserve(result, total_size);
+	auto range_data = FlatVector::GetData<typename OP::TYPE>(ListVector::GetEntry(result));
+	idx_t total_idx = 0;
+	for (idx_t i = 0; i < args_size; i++) {
+		typename OP::TYPE start_value = info.StartListValue(i);
+		typename OP::INCREMENT_TYPE increment = info.ListIncrementValue(i);
+
+		typename OP::TYPE range_value = start_value;
+		for (idx_t range_idx = 0; range_idx < list_data[i].length; range_idx++) {
+			if (range_idx > 0) {
+				OP::Increment(range_value, increment);
+			}
+			range_data[total_idx++] = range_value;
+		}
+	}
+
+	ListVector::SetListSize(result, total_size);
+	result.SetVectorType(result_type);
+
+	result.Verify(args.size());
 }
 
 } // namespace

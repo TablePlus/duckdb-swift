@@ -70,7 +70,7 @@ bool RowGroupPruner::TryOptimize(LogicalOperator &op) const {
 		return false;
 	}
 
-	if (logical_get->table_filters.HasFilters()) {
+	if (!logical_get->table_filters.filters.empty()) {
 		// If there are filters, we only order the row groups but do not prune
 		row_limit.SetInvalid();
 		row_offset.SetInvalid();
@@ -113,13 +113,13 @@ optional_ptr<LogicalOrder> RowGroupPruner::FindLogicalOrder(const LogicalLimit &
 	}
 
 	auto &logical_order = current_op.get().Cast<LogicalOrder>();
-	auto order_column_type = logical_order.orders[0].expression->GetReturnType();
+	auto order_column_type = logical_order.orders[0].expression->return_type;
 	if (!order_column_type.IsNumeric() && !order_column_type.IsTemporal() &&
 	    order_column_type != LogicalType::VARCHAR) {
 		return nullptr;
 	}
 
-	if (logical_order.orders[0].expression->GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
+	if (logical_order.orders[0].expression->type != ExpressionType::BOUND_COLUMN_REF) {
 		return nullptr;
 	}
 
@@ -131,9 +131,7 @@ optional_ptr<LogicalGet> RowGroupPruner::FindLogicalGet(const LogicalOrder &logi
 	const auto &primary_order = logical_order.orders[0];
 	auto &colref = primary_order.expression->Cast<BoundColumnRefExpression>();
 
-	JoinFilterPushdownColumn column;
-	column.probe_column_index = colref.Binding();
-	vector<JoinFilterPushdownColumn> columns {std::move(column)};
+	vector<JoinFilterPushdownColumn> columns {JoinFilterPushdownColumn {colref.binding, colref.return_type}};
 	vector<PushdownFilterTarget> pushdown_targets;
 	JoinFilterPushdownOptimizer::GetPushdownFilterTargets(*logical_order.children[0], std::move(columns),
 	                                                      pushdown_targets);
@@ -149,8 +147,8 @@ optional_ptr<LogicalGet> RowGroupPruner::FindLogicalGet(const LogicalOrder &logi
 		return nullptr;
 	}
 
-	auto &binding = pushdown_targets[0].columns[0].probe_column_index;
-	column_index = logical_get.GetColumnIndex(binding);
+	auto col_idx = pushdown_targets[0].columns[0].probe_column_index.column_index;
+	column_index = logical_get.GetColumnIds()[col_idx];
 
 	return logical_get;
 }
@@ -161,7 +159,7 @@ RowGroupPruner::CreateRowGroupReordererOptions(const optional_idx row_limit, con
                                                const StorageIndex &storage_index, LogicalLimit &logical_limit) const {
 	const auto &colref = primary_order.expression->Cast<BoundColumnRefExpression>();
 	const auto column_type =
-	    colref.GetReturnType() == LogicalType::VARCHAR ? OrderByColumnType::STRING : OrderByColumnType::NUMERIC;
+	    colref.return_type == LogicalType::VARCHAR ? OrderByColumnType::STRING : OrderByColumnType::NUMERIC;
 	const auto order_type = primary_order.type;
 	const auto null_order = primary_order.null_order;
 	const auto order_by = order_type == OrderType::ASCENDING ? OrderByStatistics::MIN : OrderByStatistics::MAX;

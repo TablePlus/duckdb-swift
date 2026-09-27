@@ -19,7 +19,6 @@ namespace duckdb {
 class BaseStatistics;
 struct SelectionVector;
 class Vector;
-class Value;
 
 struct NumericStatsData {
 	//! Whether or not the value has a max value
@@ -78,7 +77,7 @@ struct NumericStats {
 	DUCKDB_API static void Serialize(const BaseStatistics &stats, Serializer &serializer);
 	DUCKDB_API static void Deserialize(Deserializer &deserializer, BaseStatistics &stats);
 
-	DUCKDB_API static child_list_t<Value> ToStruct(const BaseStatistics &stats);
+	DUCKDB_API static string ToString(const BaseStatistics &stats);
 
 	template <class T>
 	static inline void UpdateValue(T new_value, T &min, T &max) {
@@ -90,7 +89,7 @@ struct NumericStats {
 		UpdateValue<T>(new_value, nstats.min.GetReferenceUnsafe<T>(), nstats.max.GetReferenceUnsafe<T>());
 	}
 
-	static void Verify(const BaseStatistics &stats, const Vector &vector, const SelectionVector &sel, idx_t count);
+	static void Verify(const BaseStatistics &stats, Vector &vector, const SelectionVector &sel, idx_t count);
 
 	template <class T>
 	static T GetMin(const BaseStatistics &stats) {
@@ -111,8 +110,7 @@ private:
 	static Value MinOrNull(const BaseStatistics &stats);
 	static Value MaxOrNull(const BaseStatistics &stats);
 	template <class T>
-	static void TemplatedVerify(const BaseStatistics &stats, const Vector &vector, const SelectionVector &sel,
-	                            idx_t count);
+	static void TemplatedVerify(const BaseStatistics &stats, Vector &vector, const SelectionVector &sel, idx_t count);
 };
 
 } // namespace duckdb

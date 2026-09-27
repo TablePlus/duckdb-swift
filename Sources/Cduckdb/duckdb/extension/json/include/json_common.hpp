@@ -21,9 +21,10 @@ namespace duckdb {
 
 class JSONAllocator;
 
-class JSONStringVectorBuffer : public AuxiliaryDataHolder {
+class JSONStringVectorBuffer : public VectorBuffer {
 public:
-	explicit JSONStringVectorBuffer(shared_ptr<JSONAllocator> allocator_p) : allocator(std::move(allocator_p)) {
+	explicit JSONStringVectorBuffer(shared_ptr<JSONAllocator> allocator_p)
+	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), allocator(std::move(allocator_p)) {
 	}
 
 private:
@@ -47,7 +48,7 @@ public:
 
 	void AddBuffer(Vector &vector) {
 		if (vector.GetType().InternalType() == PhysicalType::VARCHAR) {
-			StringVector::AddAuxiliaryData(vector, make_uniq<JSONStringVectorBuffer>(shared_from_this()));
+			StringVector::AddBuffer(vector, make_buffer<JSONStringVectorBuffer>(shared_from_this()));
 		}
 	}
 
@@ -107,45 +108,6 @@ struct JSONKeyEquality {
 template <typename T>
 using json_key_map_t = unordered_map<JSONKey, T, JSONKeyHash, JSONKeyEquality>;
 using json_key_set_t = unordered_set<JSONKey, JSONKeyHash, JSONKeyEquality>;
-
-//! The type of a single element of a JSON path
-enum class JSONPathElementType : uint8_t {
-	//! Object key ($.key)
-	KEY,
-	//! Array index ($[0])
-	INDEX,
-	//! Array index counting from the back ($[#-1] or $[-1])
-	REVERSE_INDEX,
-	//! The position after the last array element ($[#])
-	APPEND,
-	//! Wildcard ($.* or $[*])
-	WILDCARD,
-	//! Recursive wildcard ($.**)
-	RECURSIVE_WILDCARD,
-};
-
-//! A single element of a JSON path
-struct JSONPathElement {
-	JSONPathElementType type = JSONPathElementType::KEY;
-	//! Key for KEY elements
-	string key;
-	//! Index for INDEX and REVERSE_INDEX elements
-	idx_t index = 0;
-};
-
-//! Iterates over the elements of a JSON path ($.field[index]... syntax)
-class JSONPathIterator {
-public:
-	//! The path must start with '$' (validate before constructing)
-	JSONPathIterator(const char *ptr, idx_t len, bool binder);
-	//! Get the next path element, returns false when the path is exhausted. Throws on a malformed path.
-	bool Next(JSONPathElement &element);
-
-private:
-	const char *ptr;
-	const char *const end;
-	const bool binder;
-};
 
 //! Common JSON functionality for most JSON functions
 struct JSONCommon {
@@ -363,19 +325,15 @@ public:
 	//! Validate JSON Path ($.field[index]... syntax), returns true if there are wildcards in the path
 	static JSONPathType ValidatePath(const char *ptr, const idx_t &len, const bool binder);
 
-	//! Parse a JSON path ($.field[index]... syntax, no wildcards) into path elements
-	static vector<JSONPathElement> ParsePathElements(const char *ptr, idx_t len, bool binder);
-	//! Get JSON value by walking pre-parsed path elements
-	static yyjson_val *GetPathElements(yyjson_val *val, const vector<JSONPathElement> &elements);
-
 public:
 	//! Same as BigQuery json_value
-	static inline optional<string_t> JSONValue(yyjson_val *val, yyjson_alc *alc, Vector &) {
+	static inline string_t JSONValue(yyjson_val *val, yyjson_alc *alc, Vector &, ValidityMask &mask, idx_t idx) {
 		switch (yyjson_get_tag(val)) {
 		case YYJSON_TYPE_NULL | YYJSON_SUBTYPE_NONE:
 		case YYJSON_TYPE_ARR | YYJSON_SUBTYPE_NONE:
 		case YYJSON_TYPE_OBJ | YYJSON_SUBTYPE_NONE:
-			return nullopt;
+			mask.SetInvalid(idx);
+			return string_t {};
 		default:
 			return JSONCommon::WriteVal<yyjson_val>(val, alc);
 		}

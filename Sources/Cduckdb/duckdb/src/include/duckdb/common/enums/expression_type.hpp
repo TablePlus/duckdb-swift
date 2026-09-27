@@ -89,7 +89,6 @@ enum class ExpressionType : uint8_t {
 	// Window Functions
 	// -----------------------------
 	WINDOW_AGGREGATE = 110,
-	WINDOW_FUNCTION = 111,
 
 	WINDOW_RANK = 120,
 	WINDOW_RANK_DENSE = 121,
@@ -190,7 +189,7 @@ enum class ExpressionClass : uint8_t {
 	BOUND_CASE = 26,
 	BOUND_CAST = 27,
 	BOUND_COLUMN_REF = 28,
-	LEGACY_BOUND_COMPARISON = 29,
+	BOUND_COMPARISON = 29,
 	BOUND_CONJUNCTION = 30,
 	BOUND_CONSTANT = 31,
 	BOUND_DEFAULT = 32,
@@ -200,7 +199,7 @@ enum class ExpressionClass : uint8_t {
 	BOUND_REF = 36,
 	BOUND_SUBQUERY = 37,
 	BOUND_WINDOW = 38,
-	LEGACY_BOUND_BETWEEN = 39,
+	BOUND_BETWEEN = 39,
 	BOUND_UNNEST = 40,
 	BOUND_LAMBDA = 41,
 	BOUND_LAMBDA_REF = 42,

@@ -21,9 +21,7 @@ struct CStringConverter {
 	template <class SRC, class DST>
 	static DST Convert(SRC input) {
 		auto result = char_ptr_cast(duckdb_malloc(input.GetSize() + 1));
-		if (!result) {
-			return nullptr;
-		}
+		assert(result);
 		memcpy((void *)result, input.GetData(), input.GetSize());
 		auto write_arr = char_ptr_cast(result);
 		write_arr[input.GetSize()] = '\0';
@@ -42,10 +40,7 @@ struct CBlobConverter {
 		duckdb_blob result;
 		result.data = char_ptr_cast(duckdb_malloc(input.GetSize()));
 		result.size = input.GetSize();
-		if (!result.data) {
-			result.size = 0;
-			return result;
-		}
+		assert(result.data);
 		memcpy(result.data, input.GetData(), input.GetSize());
 		return result;
 	}
@@ -60,7 +55,7 @@ struct CBlobConverter {
 struct CTimestampMsConverter : public CBaseConverter {
 	template <class SRC, class DST>
 	static DST Convert(SRC input) {
-		if (!input.IsFinite()) {
+		if (!Timestamp::IsFinite(input)) {
 			return input;
 		}
 		return Timestamp::FromEpochMs(input.value);
@@ -70,7 +65,7 @@ struct CTimestampMsConverter : public CBaseConverter {
 struct CTimestampNsConverter : public CBaseConverter {
 	template <class SRC, class DST>
 	static DST Convert(SRC input) {
-		if (!input.IsFinite()) {
+		if (!Timestamp::IsFinite(input)) {
 			return input;
 		}
 		return Timestamp::FromEpochNanoSeconds(input.value);
@@ -80,7 +75,7 @@ struct CTimestampNsConverter : public CBaseConverter {
 struct CTimestampSecConverter : public CBaseConverter {
 	template <class SRC, class DST>
 	static DST Convert(SRC input) {
-		if (!input.IsFinite()) {
+		if (!Timestamp::IsFinite(input)) {
 			return input;
 		}
 		return Timestamp::FromEpochSeconds(input.value);
@@ -135,7 +130,7 @@ void WriteData(duckdb_column *column, ColumnDataCollection &source, const vector
 	auto target = (DST *)column->deprecated_data;
 	for (auto &input : source.Chunks(column_ids)) {
 		auto source = FlatVector::GetData<SRC>(input.data[0]);
-		auto &mask = FlatVector::ValidityMutable(input.data[0]);
+		auto &mask = FlatVector::Validity(input.data[0]);
 
 		for (idx_t k = 0; k < input.size(); k++, row++) {
 			if (!mask.RowIsValid(k)) {
@@ -152,9 +147,6 @@ duckdb_state deprecated_duckdb_translate_column(MaterializedQueryResult &result,
 	auto &collection = result.Collection();
 	idx_t row_count = collection.Count();
 	column->deprecated_nullmask = (bool *)duckdb_malloc(sizeof(bool) * collection.Count());
-	if (!column->deprecated_nullmask) {
-		return DuckDBError;
-	}
 
 	auto type_size = GetCTypeSize(column->deprecated_type);
 	if (type_size == 0) {
@@ -167,7 +159,7 @@ duckdb_state deprecated_duckdb_translate_column(MaterializedQueryResult &result,
 	}
 
 	column->deprecated_data = duckdb_malloc(type_size * row_count);
-	if (!column->deprecated_data) { // LCOV_EXCL_START
+	if (!column->deprecated_nullmask || !column->deprecated_data) { // LCOV_EXCL_START
 		// malloc failure
 		return DuckDBError;
 	} // LCOV_EXCL_STOP
@@ -241,10 +233,10 @@ duckdb_state deprecated_duckdb_translate_column(MaterializedQueryResult &result,
 		WriteData<string_t, duckdb_blob, CBlobConverter>(column, collection, column_ids);
 		break;
 	}
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case LogicalTypeId::TIMESTAMP_NS: {
 		WriteData<timestamp_t, timestamp_t, CTimestampNsConverter>(column, collection, column_ids);
 		break;
+	}
 	case LogicalTypeId::TIMESTAMP_MS: {
 		WriteData<timestamp_t, timestamp_t, CTimestampMsConverter>(column, collection, column_ids);
 		break;

@@ -2,7 +2,7 @@
 
 namespace duckdb {
 
-static inline optional<string_t> GetType(yyjson_val *val, yyjson_alc *, Vector &) {
+static inline string_t GetType(yyjson_val *val, yyjson_alc *, Vector &, ValidityMask &mask, idx_t idx) {
 	return JSONCommon::ValTypeToStringT(val);
 }
 
@@ -19,13 +19,13 @@ static void ManyTypeFunction(DataChunk &args, ExpressionState &state, Vector &re
 }
 
 static void GetTypeFunctionsInternal(ScalarFunctionSet &set, const LogicalType &input_type) {
-	set.AddFunction(ScalarFunction({input_type}, LogicalType::VARCHAR, UnaryTypeFunction, nullptr, nullptr,
+	set.AddFunction(ScalarFunction({input_type}, LogicalType::VARCHAR, UnaryTypeFunction, nullptr, nullptr, nullptr,
 	                               JSONFunctionLocalState::Init));
 	set.AddFunction(ScalarFunction({input_type, LogicalType::VARCHAR}, LogicalType::VARCHAR, BinaryTypeFunction,
-	                               JSONReadFunctionData::Bind, nullptr, JSONFunctionLocalState::Init));
+	                               JSONReadFunctionData::Bind, nullptr, nullptr, JSONFunctionLocalState::Init));
 	set.AddFunction(ScalarFunction({input_type, LogicalType::LIST(LogicalType::VARCHAR)},
 	                               LogicalType::LIST(LogicalType::VARCHAR), ManyTypeFunction,
-	                               JSONReadManyFunctionData::Bind, nullptr, JSONFunctionLocalState::Init));
+	                               JSONReadManyFunctionData::Bind, nullptr, nullptr, JSONFunctionLocalState::Init));
 }
 
 ScalarFunctionSet JSONFunctions::GetTypeFunction() {
@@ -33,11 +33,10 @@ ScalarFunctionSet JSONFunctions::GetTypeFunction() {
 	GetTypeFunctionsInternal(set, LogicalType::VARCHAR);
 	GetTypeFunctionsInternal(set, LogicalType::JSON());
 	for (auto &func : set.functions) {
-		const auto &sig = func.GetSignature();
-		if (sig.GetParameterCount() == 1 && sig.GetParameter(0).GetType().IsJSONType()) {
+		if (func.arguments.size() == 1 && func.arguments[0].IsJSONType()) {
 			continue;
 		}
-		func.SetFallible();
+		func.errors = FunctionErrors::CAN_THROW_RUNTIME_ERROR;
 	}
 	return set;
 }

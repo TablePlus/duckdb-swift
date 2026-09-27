@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/enums/catalog_type.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
@@ -24,14 +23,14 @@ public:
 
 public:
 	SetColumnCommentInfo();
-	SetColumnCommentInfo(Identifier catalog, Identifier schema, Identifier name, Identifier column_name,
-	                     Value comment_value, OnEntryNotFound if_not_found);
+	SetColumnCommentInfo(string catalog, string schema, string name, string column_name, Value comment_value,
+	                     OnEntryNotFound if_not_found);
 
 	//! The resolved Catalog Type
 	CatalogType catalog_entry_type;
 
 	//! name of the column to comment on
-	Identifier column_name;
+	string column_name;
 	//! The comment, can be NULL or a string
 	Value comment_value;
 

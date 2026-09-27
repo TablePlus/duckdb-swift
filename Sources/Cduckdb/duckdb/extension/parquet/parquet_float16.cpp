@@ -1,7 +1,6 @@
 #include "parquet_float16.hpp"
 
-#include "duckdb/common/helper.hpp"
-#include "duckdb/common/typedefs.hpp"
+#include "duckdb.hpp"
 
 namespace duckdb {
 

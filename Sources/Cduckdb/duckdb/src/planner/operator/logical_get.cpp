@@ -10,36 +10,14 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
-#include "duckdb/planner/filter/expression_filter.hpp"
 
 namespace duckdb {
-
-static void ConvertLegacyTableFilters(LogicalGet &get) {
-	vector<pair<ProjectionIndex, unique_ptr<TableFilter>>> converted_filters;
-	for (auto &entry : get.table_filters) {
-		auto filter_idx = entry.GetIndex();
-		auto &filter = entry.Filter();
-		if (filter.filter_type == TableFilterType::EXPRESSION_FILTER) {
-			continue;
-		}
-		if (filter_idx.GetIndex() >= get.GetColumnIds().size()) {
-			throw SerializationException("LogicalGet::Deserialize - filter index %llu is out of bounds for column ids",
-			                             filter_idx.GetIndex());
-		}
-		auto &column_index = get.GetColumnIds()[filter_idx.GetIndex()];
-		auto &column_type = get.GetColumnType(column_index);
-		converted_filters.emplace_back(filter_idx, ExpressionFilter::FromTableFilter(filter, column_type));
-	}
-	for (auto &entry : converted_filters) {
-		get.table_filters.SetFilterByColumnIndex(entry.first, std::move(entry.second));
-	}
-}
 
 LogicalGet::LogicalGet() : LogicalOperator(LogicalOperatorType::LOGICAL_GET) {
 }
 
-LogicalGet::LogicalGet(TableIndex table_index, TableFunction function, unique_ptr<FunctionData> bind_data,
-                       vector<LogicalType> returned_types, vector<Identifier> returned_names,
+LogicalGet::LogicalGet(idx_t table_index, TableFunction function, unique_ptr<FunctionData> bind_data,
+                       vector<LogicalType> returned_types, vector<string> returned_names,
                        virtual_column_map_t virtual_columns_p)
     : LogicalOperator(LogicalOperatorType::LOGICAL_GET), table_index(table_index), function(std::move(function)),
       bind_data(std::move(bind_data)), returned_types(std::move(returned_types)), names(std::move(returned_names)),
@@ -58,37 +36,21 @@ InsertionOrderPreservingMap<string> LogicalGet::ParamsToString() const {
 
 	string filters_info;
 	bool first_item = true;
-	for (auto &kv : table_filters) {
-		auto filter_idx = kv.GetIndex();
-		auto &filter = kv.Filter().Cast<ExpressionFilter>();
-		auto &col_id_entry = column_ids[filter_idx];
-		const auto col_id = col_id_entry.GetPrimaryIndex();
-		if (col_id_entry.IsVirtualColumn()) {
-			auto entry = virtual_columns.find(col_id);
-			if (entry != virtual_columns.end()) {
-				if (!first_item) {
-					filters_info += "\n";
-				}
-				first_item = false;
-				filters_info += filter.ToString(entry->second.name.GetIdentifierName());
-			}
-		} else if (col_id < names.size()) {
+	for (auto &kv : table_filters.filters) {
+		auto &column_index = kv.first;
+		auto &filter = kv.second;
+		if (column_index < names.size()) {
 			if (!first_item) {
 				filters_info += "\n";
 			}
-			auto column_name = col_id_entry.GetName(names[col_id].GetIdentifierName());
 			first_item = false;
-			filters_info += filter.ToString(column_name);
+			filters_info += filter->ToString(names[column_index]);
 		}
 	}
 	result["Filters"] = filters_info;
 
 	if (extra_info.sample_options) {
-		if (extra_info.sample_options->is_percentage) {
-			result["Sample Method"] = "System: " + extra_info.sample_options->sample_size.ToString() + "%";
-		} else {
-			result["Sample Method"] = "System: " + extra_info.sample_options->sample_size.ToString() + " rows";
-		}
+		result["Sample Method"] = "System: " + extra_info.sample_options->sample_size.ToString() + "%";
 	}
 
 	if (!extra_info.file_filters.empty()) {
@@ -114,10 +76,8 @@ void LogicalGet::SetColumnIds(vector<ColumnIndex> &&column_ids) {
 	this->column_ids = std::move(column_ids);
 }
 
-ProjectionIndex LogicalGet::AddColumnId(column_t column_id) {
-	ProjectionIndex result(column_ids.size());
+void LogicalGet::AddColumnId(column_t column_id) {
 	column_ids.emplace_back(column_id);
-	return result;
 }
 
 void LogicalGet::ClearColumnIds() {
@@ -132,34 +92,14 @@ vector<ColumnIndex> &LogicalGet::GetMutableColumnIds() {
 	return column_ids;
 }
 
-ProjectionIndex LogicalGet::TryGetProjectionIndex(idx_t col_idx) const {
-	for (idx_t c = 0; c < column_ids.size(); c++) {
-		if (column_ids[c].GetPrimaryIndex() == col_idx) {
-			return ProjectionIndex(c);
-		}
-	}
-	return ProjectionIndex();
-}
-
-const ColumnIndex &LogicalGet::GetColumnIndex(ColumnBinding binding) const {
-	if (binding.table_index != table_index) {
-		throw InternalException("LogicalGet::GetColumnIndex - table index does not match LogicalGet table index");
-	}
-	return column_ids[binding.column_index];
-}
-
-const ColumnIndex &LogicalGet::GetColumnIndex(ProjectionIndex proj_index) const {
-	return GetColumnIndex(ColumnBinding(table_index, proj_index));
-}
-
 vector<ColumnBinding> LogicalGet::GetColumnBindings() {
 	if (column_ids.empty()) {
-		return {ColumnBinding(table_index, ProjectionIndex(0))};
+		return {ColumnBinding(table_index, 0)};
 	}
 	vector<ColumnBinding> result;
 	if (projection_ids.empty()) {
-		for (auto col_idx : ProjectionIndex::GetIndexes(column_ids.size())) {
-			result.emplace_back(table_index, ProjectionIndex(col_idx));
+		for (idx_t col_idx = 0; col_idx < column_ids.size(); col_idx++) {
+			result.emplace_back(table_index, col_idx);
 		}
 	} else {
 		for (auto proj_id : projection_ids) {
@@ -193,7 +133,7 @@ const LogicalType &LogicalGet::GetColumnType(const ColumnIndex &index) const {
 	}
 }
 
-const Identifier &LogicalGet::GetColumnName(const ColumnIndex &index) const {
+const string &LogicalGet::GetColumnName(const ColumnIndex &index) const {
 	if (index.IsVirtualColumn()) {
 		auto entry = virtual_columns.find(index.GetPrimaryIndex());
 		if (entry == virtual_columns.end()) {
@@ -296,14 +236,6 @@ void LogicalGet::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
 	function.set_scan_order(std::move(options), bind_data.get());
 }
 
-void LogicalGet::SetPartitionsToScan(vector<idx_t> partition_indices) {
-	if (!function.set_partitions_to_scan) {
-		throw InternalException("LogicalGet::SetPartitionsToScan called but function is not defined");
-	}
-	scan_partition_indices = partition_indices;
-	function.set_partitions_to_scan(std::move(partition_indices), bind_data.get());
-}
-
 void LogicalGet::Serialize(Serializer &serializer) const {
 	LogicalOperator::Serialize(serializer);
 	serializer.WriteProperty(200, "table_index", table_index);
@@ -327,7 +259,6 @@ void LogicalGet::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<optional_idx>(213, "ordinality_idx", ordinality_idx);
 	serializer.WritePropertyWithDefault<unique_ptr<RowGroupOrderOptions>>(214, "row_group_order_options",
 	                                                                      row_group_order_options);
-	serializer.WritePropertyWithDefault(215, "scan_partition_indices", scan_partition_indices, vector<idx_t>());
 }
 
 unique_ptr<LogicalOperator> LogicalGet::Deserialize(Deserializer &deserializer) {
@@ -360,8 +291,6 @@ unique_ptr<LogicalOperator> LogicalGet::Deserialize(Deserializer &deserializer) 
 	deserializer.ReadPropertyWithDefault<optional_idx>(213, "ordinality_idx", result->ordinality_idx);
 	auto row_group_order_options =
 	    deserializer.ReadPropertyWithDefault<unique_ptr<RowGroupOrderOptions>>(214, "row_group_order_options");
-	auto scan_partition_indices =
-	    deserializer.ReadPropertyWithExplicitDefault<vector<idx_t>>(215, "scan_partition_indices", vector<idx_t>());
 	if (!legacy_column_ids.empty()) {
 		if (!result->column_ids.empty()) {
 			throw SerializationException(
@@ -377,7 +306,7 @@ unique_ptr<LogicalOperator> LogicalGet::Deserialize(Deserializer &deserializer) 
 		TableFunctionRef empty_ref;
 		TableFunctionBindInput input(result->parameters, result->named_parameters, result->input_table_types,
 		                             result->input_table_names, function.function_info.get(), nullptr, result->function,
-		                             empty_ref, nullptr);
+		                             empty_ref);
 
 		vector<LogicalType> bind_return_types;
 		vector<string> bind_names;
@@ -418,27 +347,23 @@ unique_ptr<LogicalOperator> LogicalGet::Deserialize(Deserializer &deserializer) 
 	}
 	result->virtual_columns = std::move(virtual_columns);
 	result->bind_data = std::move(bind_data);
-	ConvertLegacyTableFilters(*result);
 	if (row_group_order_options) {
 		result->SetScanOrder(std::move(row_group_order_options));
-	}
-	if (!scan_partition_indices.empty()) {
-		result->SetPartitionsToScan(std::move(scan_partition_indices));
 	}
 	return std::move(result);
 }
 
-vector<TableIndex> LogicalGet::GetTableIndex() const {
-	return vector<TableIndex> {table_index};
+vector<idx_t> LogicalGet::GetTableIndex() const {
+	return vector<idx_t> {table_index};
 }
 
 string LogicalGet::GetName() const {
 #ifdef DEBUG
 	if (DBConfigOptions::debug_print_bindings) {
-		return StringUtil::Upper(function.name.GetIdentifierName()) + StringUtil::Format(" #%llu", table_index.index);
+		return StringUtil::Upper(function.name) + StringUtil::Format(" #%llu", table_index);
 	}
 #endif
-	return StringUtil::Upper(function.name.GetIdentifierName());
+	return StringUtil::Upper(function.name);
 }
 
 } // namespace duckdb

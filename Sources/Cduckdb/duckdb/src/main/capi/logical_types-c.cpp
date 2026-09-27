@@ -4,7 +4,6 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/geometry_crs.hpp"
 #include "duckdb/common/types/decimal.hpp"
-#include "duckdb/catalog/catalog.hpp"
 
 namespace duckdb {
 
@@ -87,7 +86,7 @@ duckdb_logical_type duckdb_create_union_type(duckdb_logical_type *member_types_p
 		duckdb::child_list_t<duckdb::LogicalType> members;
 
 		for (idx_t i = 0; i < member_count; i++) {
-			members.emplace_back(make_pair(member_names[i], *member_types[i]));
+			members.push_back(make_pair(member_names[i], *member_types[i]));
 		}
 		duckdb::LogicalType *mtype = new duckdb::LogicalType(duckdb::LogicalType::UNION(members));
 		return reinterpret_cast<duckdb_logical_type>(mtype);
@@ -112,14 +111,9 @@ duckdb_logical_type duckdb_create_struct_type(duckdb_logical_type *member_types_
 		duckdb::child_list_t<duckdb::LogicalType> members;
 
 		for (idx_t i = 0; i < member_count; i++) {
-			members.emplace_back(make_pair(member_names[i], *member_types[i]));
+			members.push_back(make_pair(member_names[i], *member_types[i]));
 		}
-		// an unnamed (empty member names) struct is a TUPLE - construct it as such so it is treated canonically
-		auto struct_type = duckdb::LogicalType::STRUCT(members);
-		if (duckdb::StructType::IsUnnamed(struct_type)) {
-			struct_type = duckdb::LogicalType::TUPLE(std::move(members));
-		}
-		duckdb::LogicalType *mtype = new duckdb::LogicalType(std::move(struct_type));
+		duckdb::LogicalType *mtype = new duckdb::LogicalType(duckdb::LogicalType::STRUCT(members));
 		return reinterpret_cast<duckdb_logical_type>(mtype);
 	} catch (...) {
 		return nullptr;
@@ -131,7 +125,7 @@ duckdb_logical_type duckdb_create_enum_type(const char **member_names, idx_t mem
 		return nullptr;
 	}
 	duckdb::Vector enum_vector(duckdb::LogicalType::VARCHAR, member_count);
-	auto enum_vector_ptr = duckdb::FlatVector::GetDataMutable<duckdb::string_t>(enum_vector);
+	auto enum_vector_ptr = duckdb::FlatVector::GetData<duckdb::string_t>(enum_vector);
 
 	for (idx_t i = 0; i < member_count; i++) {
 		if (!member_names[i]) {

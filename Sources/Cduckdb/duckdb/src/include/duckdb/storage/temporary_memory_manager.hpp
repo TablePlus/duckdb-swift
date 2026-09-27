@@ -11,7 +11,6 @@
 #include "duckdb/common/atomic.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/reference_map.hpp"
-#include "duckdb/common/thread_annotation.hpp"
 #include "duckdb/storage/storage_info.hpp"
 
 namespace duckdb {
@@ -100,50 +99,46 @@ public:
 	unique_ptr<TemporaryMemoryState> Register(ClientContext &context);
 
 private:
+	//! Locks the TemporaryMemoryManager
+	unique_lock<mutex> Lock();
 	//! Get the default minimum reservation
-	idx_t DefaultMinimumReservation() const DUCKDB_REQUIRES(lock);
-	//! Cap a reservation by the current memory limit managed by TMM
-	idx_t CapReservation(idx_t reservation) const DUCKDB_REQUIRES(lock);
-	//! Get the effective minimum reservation for a state after applying TMM limits
-	idx_t MinimumReservation(const TemporaryMemoryState &temporary_memory_state) const DUCKDB_REQUIRES(lock);
+	idx_t DefaultMinimumReservation() const;
 	//! Unregister a TemporaryMemoryState (called by the destructor of TemporaryMemoryState)
 	void Unregister(TemporaryMemoryState &temporary_memory_state);
 	//! Update memory_limit, has_temporary_directory, and num_threads (must hold the lock)
-	void UpdateConfiguration(ClientContext &context) DUCKDB_REQUIRES(lock);
+	void UpdateConfiguration(ClientContext &context);
 	//! Update the TemporaryMemoryState to the new remaining size, and updates the reservation (must hold the lock)
-	void UpdateState(ClientContext &context, TemporaryMemoryState &temporary_memory_state) DUCKDB_REQUIRES(lock);
+	void UpdateState(ClientContext &context, TemporaryMemoryState &temporary_memory_state);
 	//! Set the remaining size of a TemporaryMemoryState (must hold the lock)
-	void SetRemainingSize(TemporaryMemoryState &temporary_memory_state, idx_t new_remaining_size) DUCKDB_REQUIRES(lock);
+	void SetRemainingSize(TemporaryMemoryState &temporary_memory_state, idx_t new_remaining_size);
 	//! Set the reservation of a TemporaryMemoryState (must hold the lock)
-	void SetReservation(TemporaryMemoryState &temporary_memory_state, idx_t new_reservation) DUCKDB_REQUIRES(lock);
+	void SetReservation(TemporaryMemoryState &temporary_memory_state, idx_t new_reservation);
 	//! Computes optimal reservation of a TemporaryMemoryState based on a cost function
-	idx_t ComputeReservation(const TemporaryMemoryState &temporary_memory_state) const DUCKDB_REQUIRES(lock);
-	//! Compute initial reservation for use in ComputeReservation
-	idx_t ComputeInitialReservation(const TemporaryMemoryState &temporary_memory_state) const DUCKDB_REQUIRES(lock);
+	idx_t ComputeReservation(const TemporaryMemoryState &temporary_memory_state) const;
 	//! Verify internal counts (must hold the lock)
-	void Verify() const DUCKDB_REQUIRES(lock);
+	void Verify() const;
 
 private:
 	//! Lock because TemporaryMemoryManager is used concurrently
-	annotated_mutex lock;
+	mutex lock;
 
 	//! Memory limit of the buffer pool
-	idx_t memory_limit DUCKDB_GUARDED_BY(lock) = DConstants::INVALID_INDEX;
+	idx_t memory_limit = DConstants::INVALID_INDEX;
 	//! Whether there is a temporary directory that we can offload blocks to
-	bool has_temporary_directory DUCKDB_GUARDED_BY(lock) = false;
+	bool has_temporary_directory = false;
 	//! Number of threads
-	idx_t num_threads DUCKDB_GUARDED_BY(lock) = DConstants::INVALID_INDEX;
+	idx_t num_threads = DConstants::INVALID_INDEX;
 	//! Number of active connections
-	idx_t num_connections DUCKDB_GUARDED_BY(lock) = DConstants::INVALID_INDEX;
+	idx_t num_connections = DConstants::INVALID_INDEX;
 	//! Max memory per query
-	idx_t query_max_memory DUCKDB_GUARDED_BY(lock) = DConstants::INVALID_INDEX;
+	idx_t query_max_memory = DConstants::INVALID_INDEX;
 
 	//! Currently active states
-	reference_set_t<TemporaryMemoryState> active_states DUCKDB_GUARDED_BY(lock);
+	reference_set_t<TemporaryMemoryState> active_states;
 	//! The sum of reservations of all active states
-	idx_t reservation DUCKDB_GUARDED_BY(lock);
+	idx_t reservation;
 	//! The sum of the remaining size of all active states
-	idx_t remaining_size DUCKDB_GUARDED_BY(lock);
+	idx_t remaining_size;
 };
 
 } // namespace duckdb

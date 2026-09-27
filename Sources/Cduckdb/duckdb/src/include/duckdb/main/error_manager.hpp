@@ -11,7 +11,6 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/map.hpp"
-#include "duckdb/common/types/string.hpp"
 
 namespace duckdb {
 class String;

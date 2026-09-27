@@ -9,8 +9,7 @@ namespace duckdb {
 static void VectorTypeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	auto data = ConstantVector::GetData<string_t>(result);
-	auto &heap = StringVector::GetStringHeap(result);
-	data[0] = heap.AddString(EnumUtil::ToString(input.data[0].GetVectorType()));
+	data[0] = StringVector::AddString(result, EnumUtil::ToString(input.data[0].GetVectorType()));
 }
 
 ScalarFunction VectorTypeFun::GetFunction() {

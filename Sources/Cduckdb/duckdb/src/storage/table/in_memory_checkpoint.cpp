@@ -1,13 +1,9 @@
 #include "duckdb/storage/table/in_memory_checkpoint.hpp"
-#include "duckdb/main/attached_database.hpp"
-
+#include "duckdb/common/serializer/binary_serializer.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/common/enums/checkpoint_abort.hpp"
-#include "duckdb/common/serializer/binary_serializer.hpp"
 #include "duckdb/main/settings.hpp"
-#include "duckdb/storage/data_table.hpp"
-#include "duckdb/storage/table/column_segment.hpp"
 
 namespace duckdb {
 
@@ -98,8 +94,7 @@ InMemoryTableDataWriter::InMemoryTableDataWriter(InMemoryCheckpointer &checkpoin
 }
 
 void InMemoryTableDataWriter::WriteUnchangedTable(MetaBlockPointer pointer,
-                                                  const vector<MetaBlockPointer> &metadata_pointers, idx_t total_rows,
-                                                  idx_t next_row_id) {
+                                                  const vector<MetaBlockPointer> &metadata_pointers, idx_t total_rows) {
 }
 
 void InMemoryTableDataWriter::FinalizeTable(const TableStatistics &global_stats, DataTableInfo &info,
@@ -125,7 +120,7 @@ MetadataManager &InMemoryTableDataWriter::GetMetadataManager() {
 
 InMemoryPartialBlock::InMemoryPartialBlock(ColumnData &data, ColumnSegment &segment, PartialBlockState state,
                                            BlockManager &block_manager)
-    : PartialBlock(state, block_manager, segment.GetBlockHandle()) {
+    : PartialBlock(state, block_manager, segment.block) {
 	InMemoryPartialBlock::AddSegmentToTail(data, segment, 0);
 }
 

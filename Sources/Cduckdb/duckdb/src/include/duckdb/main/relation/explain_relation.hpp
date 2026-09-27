@@ -15,12 +15,12 @@ namespace duckdb {
 class ExplainRelation : public Relation {
 public:
 	explicit ExplainRelation(shared_ptr<Relation> child, ExplainType type = ExplainType::EXPLAIN_STANDARD,
-	                         const ProfilerPrintFormat &format = ProfilerPrintFormat::Default());
+	                         ExplainFormat format = ExplainFormat::DEFAULT);
 
 	shared_ptr<Relation> child;
 	vector<ColumnDefinition> columns;
 	ExplainType type;
-	ProfilerPrintFormat format;
+	ExplainFormat format;
 
 public:
 	BoundStatement Bind(Binder &binder) override;

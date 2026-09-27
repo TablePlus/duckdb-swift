@@ -2,12 +2,11 @@
 
 namespace duckdb {
 
-void TreeRenderer::ToStream(RenderTree &root, BaseTreeRenderer &ss) {
+void TreeRenderer::ToStream(RenderTree &root, std::ostream &ss) {
 	if (!UsesRawKeyNames()) {
 		root.SanitizeKeyNames();
 	}
-	ToStreamInternal(root, ss);
-	Finish();
+	return ToStreamInternal(root, ss);
 }
 
 } // namespace duckdb

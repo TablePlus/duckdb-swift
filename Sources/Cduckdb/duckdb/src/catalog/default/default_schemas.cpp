@@ -11,9 +11,10 @@ struct DefaultSchema {
 
 static const DefaultSchema internal_schemas[] = {{"information_schema"}, {"pg_catalog"}, {nullptr}};
 
-bool DefaultSchemaGenerator::IsDefaultSchema(const Identifier &input_schema) {
+bool DefaultSchemaGenerator::IsDefaultSchema(const string &input_schema) {
+	auto schema = StringUtil::Lower(input_schema);
 	for (idx_t index = 0; internal_schemas[index].name != nullptr; index++) {
-		if (internal_schemas[index].name == input_schema) {
+		if (internal_schemas[index].name == schema) {
 			return true;
 		}
 	}
@@ -24,19 +25,18 @@ DefaultSchemaGenerator::DefaultSchemaGenerator(Catalog &catalog) : DefaultGenera
 }
 
 unique_ptr<CatalogEntry> DefaultSchemaGenerator::CreateDefaultEntry(CatalogTransaction transaction,
-                                                                    const Identifier &entry_name) {
+                                                                    const string &entry_name) {
 	if (IsDefaultSchema(entry_name)) {
 		CreateSchemaInfo info;
-		info.SetQualifiedName(
-		    QualifiedName({Identifier(StringUtil::Lower(entry_name.GetIdentifierName()))}, Identifier()));
+		info.schema = StringUtil::Lower(entry_name);
 		info.internal = true;
 		return make_uniq_base<CatalogEntry, DuckSchemaEntry>(catalog, info);
 	}
 	return nullptr;
 }
 
-vector<Identifier> DefaultSchemaGenerator::GetDefaultEntries() {
-	vector<Identifier> result;
+vector<string> DefaultSchemaGenerator::GetDefaultEntries() {
+	vector<string> result;
 	for (idx_t index = 0; internal_schemas[index].name != nullptr; index++) {
 		result.emplace_back(internal_schemas[index].name);
 	}

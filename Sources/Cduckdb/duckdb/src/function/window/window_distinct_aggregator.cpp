@@ -18,15 +18,15 @@ enum class WindowDistinctSortStage : uint8_t { INIT, COMBINE, FINALIZE, SORTED, 
 // WindowDistinctAggregator
 //===--------------------------------------------------------------------===//
 bool WindowDistinctAggregator::CanAggregate(const BoundWindowExpression &wexpr) {
-	if (!wexpr.AggregateFunction()) {
+	if (!wexpr.aggregate) {
 		return false;
 	}
 
-	if (!wexpr.AggregateFunction()->CanAggregate()) {
+	if (!wexpr.aggregate->CanAggregate()) {
 		return false;
 	}
 
-	return wexpr.Distinct() && wexpr.WindowExclude() == WindowExcludeMode::NO_OTHER && wexpr.ArgOrders().empty();
+	return wexpr.distinct && wexpr.exclude_clause == WindowExcludeMode::NO_OTHER && wexpr.arg_orders.empty();
 }
 
 WindowDistinctAggregator::WindowDistinctAggregator(const BoundWindowExpression &wexpr, WindowSharedExpressions &shared,
@@ -125,7 +125,7 @@ WindowDistinctAggregatorGlobalState::WindowDistinctAggregatorGlobalState(ClientC
 	sort_types = aggregator.arg_types;
 	sort_types.emplace_back(LogicalType::UBIGINT);
 
-	//	All expressions will be precomputed for sharing, so we just need to reference the arguments
+	//	All expressions will be precomputed for sharing, so we jsut need to reference the arguments
 	vector<BoundOrderByNode> orders;
 	for (const auto &type : sort_types) {
 		auto expr = make_uniq<BoundReferenceExpression>(type, orders.size());
@@ -259,9 +259,8 @@ void WindowDistinctAggregatorLocalState::Sink(ExecutionContext &context, DataChu
 	const auto count = sink_chunk.size();
 	sort_chunk.Reset();
 	auto &sorted_vec = sort_chunk.data.back();
-	auto sorted = FlatVector::GetDataMutable<idx_t>(sorted_vec);
+	auto sorted = FlatVector::GetData<idx_t>(sorted_vec);
 	std::iota(sorted, sorted + count, input_idx);
-	FlatVector::SetSize(sorted_vec, count_t(count));
 
 	// Our arguments are being fully materialised,
 	// but we also need them as sort keys.
@@ -269,6 +268,7 @@ void WindowDistinctAggregatorLocalState::Sink(ExecutionContext &context, DataChu
 	for (column_t c = 0; c < child_idx.size(); ++c) {
 		sort_chunk.data[c].Reference(coll_chunk.data[child_idx[c]]);
 	}
+	sort_chunk.SetCardinality(sink_chunk);
 
 	//	Apply FILTER clause, if any
 	if (filter_sel) {
@@ -447,27 +447,29 @@ void WindowDistinctAggregatorLocalState::Sorted() {
 		                   const auto count = MinValue<idx_t>(prev.size(), curr.size());
 
 		                   // The input index has probably been sliced.
-		                   auto input_idx = curr.data.back().Values<idx_t>();
+		                   UnifiedVectorFormat input_format;
+		                   curr.data.back().ToUnifiedFormat(count, input_format);
+		                   auto input_idx = UnifiedVectorFormat::GetData<idx_t>(input_format);
 
 		                   const auto nmatch = count - ndistinct;
 		                   //	9:	if sorted[i].first == sorted[i-1].first then
 		                   //	10:		prevIdcs[i] ← sorted[i-1].second
 		                   for (idx_t j = 0; j < nmatch; ++j) {
 			                   auto scan_idx = matching.get_index(j);
-			                   auto i = input_idx[scan_idx].GetValueUnsafe();
-			                   auto second = scan_idx ? input_idx[scan_idx - 1].GetValueUnsafe() : prev_i;
+			                   auto i = input_idx[input_format.sel->get_index(scan_idx)];
+			                   auto second = scan_idx ? input_idx[input_format.sel->get_index(scan_idx - 1)] : prev_i;
 			                   prev_idcs[i] = ZippedTuple(second + 1, i);
 		                   }
 		                   //	11:	else
 		                   //	12:		prevIdcs[i] ← “-”
 		                   for (idx_t j = 0; j < ndistinct; ++j) {
 			                   auto scan_idx = distinct.get_index(j);
-			                   auto i = input_idx[scan_idx].GetValueUnsafe();
+			                   auto i = input_idx[input_format.sel->get_index(scan_idx)];
 			                   prev_idcs[i] = ZippedTuple(0, i);
 		                   }
 
 		                   //	Remember the last input_idx of this chunk.
-		                   prev_i = input_idx[count - 1].GetValueUnsafe();
+		                   prev_i = input_idx[input_format.sel->get_index(count - 1)];
 	                   });
 
 	//	13:	return prevIdcs
@@ -536,16 +538,16 @@ void WindowDistinctSortTree::BuildRun(idx_t level_nr, idx_t run_idx, WindowDisti
 	auto &leaves = ldastate.leaves;
 	auto &sel = ldastate.sel;
 
-	AggregateInputData aggr_input_data(aggr, ldastate.allocator);
+	AggregateInputData aggr_input_data(aggr.GetFunctionData(), ldastate.allocator);
 
 	//! The states to update
 	auto &update_v = ldastate.update_v;
-	auto updates = FlatVector::ScatterWriter<data_ptr_t>(update_v);
+	auto updates = FlatVector::GetData<data_ptr_t>(update_v);
 
 	auto &source_v = ldastate.source_v;
-	auto sources = FlatVector::ScatterWriter<data_ptr_t>(source_v);
+	auto sources = FlatVector::GetData<data_ptr_t>(source_v);
 	auto &target_v = ldastate.target_v;
-	auto targets = FlatVector::ScatterWriter<data_ptr_t>(target_v);
+	auto targets = FlatVector::GetData<data_ptr_t>(target_v);
 
 	auto &zipped_tree = gdastate.zipped_tree;
 	auto &zipped_level = zipped_tree.tree[level_nr].first;
@@ -636,8 +638,8 @@ void WindowDistinctAggregatorLocalState::FlushStates() {
 	}
 
 	const auto &aggr = gdstate.aggr;
-	AggregateInputData aggr_input_data(aggr, allocator);
-	statel.Verify();
+	AggregateInputData aggr_input_data(aggr.GetFunctionData(), allocator);
+	statel.Verify(flush_count);
 	aggr.function.GetStateCombineCallback()(statel, statep, aggr_input_data, flush_count);
 
 	flush_count = 0;
@@ -646,8 +648,8 @@ void WindowDistinctAggregatorLocalState::FlushStates() {
 void WindowDistinctAggregatorLocalState::Evaluate(ExecutionContext &context,
                                                   const WindowDistinctAggregatorGlobalState &gdstate,
                                                   const DataChunk &bounds, Vector &result, idx_t count, idx_t row_idx) {
-	auto ldata = FlatVector::GetDataMutable<const_data_ptr_t>(statel);
-	auto pdata = FlatVector::GetDataMutable<data_ptr_t>(statep);
+	auto ldata = FlatVector::GetData<const_data_ptr_t>(statel);
+	auto pdata = FlatVector::GetData<data_ptr_t>(statep);
 
 	const auto &merge_sort_tree = gdstate.merge_sort_tree;
 	const auto &levels_flat_native = gdstate.levels_flat_native;

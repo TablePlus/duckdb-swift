@@ -23,8 +23,8 @@ struct DateTrunc {
 	}
 
 	template <class TA, class TR, class OP>
-	static inline void UnaryExecute(const Vector &left, Vector &result) {
-		UnaryExecutor::Execute<TA, TR>(left, result, UnaryFunction<TA, TR, OP>);
+	static inline void UnaryExecute(Vector &left, Vector &result, idx_t count) {
+		UnaryExecutor::Execute<TA, TR>(left, result, count, UnaryFunction<TA, TR, OP>);
 	}
 
 	struct MillenniumOperator {
@@ -96,42 +96,52 @@ struct DateTrunc {
 		}
 	};
 
-	// Truncate a UTC timestamp to the nearest fixed-width interval boundary.
-	// Applies to any unit whose length is a constant number of microseconds
-	// (second, minute, hour, day). Variable-length units (month, year, etc.)
-	// must use the calendar-decomposition path above.
-	static inline timestamp_t TruncFixed(timestamp_t ts, int64_t interval_us) {
-		const int64_t v = ts.value;
-		// Round towards negative infinity instead of 0
-		const int64_t q = v / interval_us - (v % interval_us != 0 && v < 0 ? 1 : 0);
-		return timestamp_t(q * interval_us);
-	}
-
 	struct HourOperator {
 		template <class TA, class TR>
 		static inline TR Operation(TA input) {
-			return TruncFixed(input, Interval::MICROS_PER_HOUR);
+			int32_t hour, min, sec, micros;
+			date_t date;
+			dtime_t time;
+			Timestamp::Convert(input, date, time);
+			Time::Convert(time, hour, min, sec, micros);
+			return Timestamp::FromDatetime(date, Time::FromTime(hour, 0, 0, 0));
 		}
 	};
 
 	struct MinuteOperator {
 		template <class TA, class TR>
 		static inline TR Operation(TA input) {
-			return TruncFixed(input, Interval::MICROS_PER_MINUTE);
+			int32_t hour, min, sec, micros;
+			date_t date;
+			dtime_t time;
+			Timestamp::Convert(input, date, time);
+			Time::Convert(time, hour, min, sec, micros);
+			return Timestamp::FromDatetime(date, Time::FromTime(hour, min, 0, 0));
 		}
 	};
 
 	struct SecondOperator {
 		template <class TA, class TR>
 		static inline TR Operation(TA input) {
-			return TruncFixed(input, Interval::MICROS_PER_SEC);
+			int32_t hour, min, sec, micros;
+			date_t date;
+			dtime_t time;
+			Timestamp::Convert(input, date, time);
+			Time::Convert(time, hour, min, sec, micros);
+			return Timestamp::FromDatetime(date, Time::FromTime(hour, min, sec, 0));
 		}
 	};
 
 	struct MillisecondOperator {
 		template <class TA, class TR>
 		static inline TR Operation(TA input) {
-			return TruncFixed(input, Interval::MICROS_PER_MSEC);
+			int32_t hour, min, sec, micros;
+			date_t date;
+			dtime_t time;
+			Timestamp::Convert(input, date, time);
+			Time::Convert(time, hour, min, sec, micros);
+			micros -= UnsafeNumericCast<int32_t>(micros % Interval::MICROS_PER_MSEC);
+			return Timestamp::FromDatetime(date, Time::FromTime(hour, min, sec, micros));
 		}
 	};
 
@@ -231,7 +241,7 @@ timestamp_t DateTrunc::DayOperator::Operation(date_t input) {
 
 template <>
 timestamp_t DateTrunc::DayOperator::Operation(timestamp_t input) {
-	return TruncFixed(input, Interval::MICROS_PER_DAY);
+	return DayOperator::Operation<date_t, timestamp_t>(Timestamp::GetDate(input));
 }
 
 template <>
@@ -408,55 +418,55 @@ struct DateTruncBinaryOperator {
 };
 
 template <typename TA, typename TR>
-void DateTruncUnaryExecutor(DatePartSpecifier type, const Vector &left, Vector &result) {
+void DateTruncUnaryExecutor(DatePartSpecifier type, Vector &left, Vector &result, idx_t count) {
 	switch (type) {
 	case DatePartSpecifier::MILLENNIUM:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MillenniumOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MillenniumOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::CENTURY:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::CenturyOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::CenturyOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::DECADE:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::DecadeOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::DecadeOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::YEAR:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::YearOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::YearOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::QUARTER:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::QuarterOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::QuarterOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::MONTH:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MonthOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MonthOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::WEEK:
 	case DatePartSpecifier::YEARWEEK:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::WeekOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::WeekOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::ISOYEAR:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::ISOYearOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::ISOYearOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::DAY:
 	case DatePartSpecifier::DOW:
 	case DatePartSpecifier::ISODOW:
 	case DatePartSpecifier::DOY:
 	case DatePartSpecifier::JULIAN_DAY:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::DayOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::DayOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::HOUR:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::HourOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::HourOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::MINUTE:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MinuteOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MinuteOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::SECOND:
 	case DatePartSpecifier::EPOCH:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::SecondOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::SecondOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::MILLISECONDS:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MillisecondOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MillisecondOperator>(left, result, count);
 		break;
 	case DatePartSpecifier::MICROSECONDS:
-		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MicrosecondOperator>(left, result);
+		DateTrunc::UnaryExecute<TA, TR, DateTrunc::MicrosecondOperator>(left, result, count);
 		break;
 	default:
 		throw NotImplementedException("Specifier type not implemented for DATETRUNC");
@@ -466,18 +476,21 @@ void DateTruncUnaryExecutor(DatePartSpecifier type, const Vector &left, Vector &
 template <typename TA, typename TR>
 void DateTruncFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 2);
-	const auto &part_arg = args.data[0];
-	const auto &date_arg = args.data[1];
+	auto &part_arg = args.data[0];
+	auto &date_arg = args.data[1];
 
 	if (part_arg.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		// Common case of constant part.
 		if (ConstantVector::IsNull(part_arg)) {
-			throw InternalException("DateTrunc called with constant NULL part");
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
+			ConstantVector::SetNull(result, true);
+		} else {
+			const auto type = GetDatePartSpecifier(ConstantVector::GetData<string_t>(part_arg)->GetString());
+			DateTruncUnaryExecutor<TA, TR>(type, date_arg, result, args.size());
 		}
-		const auto type = GetDatePartSpecifier(ConstantVector::GetData<string_t>(part_arg)->GetString());
-		DateTruncUnaryExecutor<TA, TR>(type, date_arg, result);
 	} else {
-		BinaryExecutor::ExecuteStandard<string_t, TA, TR, DateTruncBinaryOperator>(part_arg, date_arg, result);
+		BinaryExecutor::ExecuteStandard<string_t, TA, TR, DateTruncBinaryOperator>(part_arg, date_arg, result,
+		                                                                           args.size());
 	}
 }
 
@@ -556,17 +569,21 @@ function_statistics_t DateTruncStats(DatePartSpecifier type) {
 	}
 }
 
-unique_ptr<FunctionData> DateTruncBind(BindScalarFunctionInput &input) {
-	auto &bound_function = input.GetBoundFunction();
-	// Rebind to return a date if we are truncating that far - only possible if the part is a constant
-	auto part_constant = input.TryGetConstant(0);
-	if (!part_constant || part_constant->IsNull()) {
+unique_ptr<FunctionData> DateTruncBind(ClientContext &context, ScalarFunction &bound_function,
+                                       vector<unique_ptr<Expression>> &arguments) {
+	if (!arguments[0]->IsFoldable()) {
 		return nullptr;
 	}
-	const auto part_name = part_constant->ToString();
+
+	// Rebind to return a date if we are truncating that far
+	Value part_value = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
+	if (part_value.IsNull()) {
+		return nullptr;
+	}
+	const auto part_name = part_value.ToString();
 	const auto part_code = GetDatePartSpecifier(part_name);
 
-	switch (bound_function.GetArguments()[1].id()) {
+	switch (bound_function.arguments[1].id()) {
 	case LogicalType::TIMESTAMP:
 		bound_function.SetStatisticsCallback(DateTruncStats<timestamp_t, timestamp_t>(part_code));
 		break;
@@ -592,7 +609,6 @@ ScalarFunctionSet DateTruncFun::GetFunctions() {
 	                                      DateTruncFunction<interval_t, interval_t>));
 	for (auto &func : date_trunc.functions) {
 		func.SetFallible();
-		func.SetArgProperties(1, ArgProperties().NonDecreasing());
 	}
 	return date_trunc;
 }

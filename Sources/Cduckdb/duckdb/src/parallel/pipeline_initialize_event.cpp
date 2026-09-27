@@ -18,11 +18,7 @@ public:
 
 public:
 	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
-		if (pipeline.IsExternalInput()) {
-			pipeline.PrepareExternalInput();
-		} else {
-			pipeline.ResetSink();
-		}
+		pipeline.ResetSink();
 		event->FinishTask();
 		return TaskExecutionResult::TASK_FINISHED;
 	}

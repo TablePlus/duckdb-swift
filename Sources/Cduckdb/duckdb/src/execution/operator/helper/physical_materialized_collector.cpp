@@ -15,8 +15,7 @@ class MaterializedCollectorGlobalState : public GlobalSinkState {
 public:
 	mutex glock;
 	unique_ptr<ColumnDataCollection> collection;
-	//! This is weak to avoid creating a cyclical reference
-	weak_ptr<ClientContext> context;
+	shared_ptr<ClientContext> context;
 };
 
 class MaterializedCollectorLocalState : public LocalSinkState {
@@ -65,12 +64,11 @@ unique_ptr<LocalSinkState> PhysicalMaterializedCollector::GetLocalSinkState(Exec
 
 unique_ptr<QueryResult> PhysicalMaterializedCollector::GetResult(GlobalSinkState &state) const {
 	auto &gstate = state.Cast<MaterializedCollectorGlobalState>();
-	auto cc = gstate.context.lock();
 	if (!gstate.collection) {
-		gstate.collection = CreateCollection(*cc);
+		gstate.collection = CreateCollection(*gstate.context);
 	}
-	auto result = make_uniq<MaterializedQueryResult>(statement_type, properties, IdentifiersToStrings(names),
-	                                                 std::move(gstate.collection), cc->GetClientProperties());
+	auto result = make_uniq<MaterializedQueryResult>(statement_type, properties, names, std::move(gstate.collection),
+	                                                 gstate.context->GetClientProperties());
 	return std::move(result);
 }
 

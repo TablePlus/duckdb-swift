@@ -7,8 +7,9 @@
 
 // Allow implicit conversion from char16_t* to UnicodeString for this file:
 // Helpful in toString methods and elsewhere.
+#ifndef UNISTR_FROM_STRING_EXPLICIT
 #define UNISTR_FROM_STRING_EXPLICIT
-
+#endif
 #include "numparse_types.h"
 #include "numparse_decimal.h"
 #include "static_unicode_sets.h"
@@ -33,36 +34,16 @@ DecimalMatcher::DecimalMatcher(const DecimalFormatSymbols& symbols, const Groupe
         decimalSeparator = symbols.getConstSymbol(DecimalFormatSymbols::kDecimalSeparatorSymbol);
     }
     bool strictSeparators = 0 != (parseFlags & PARSE_FLAG_STRICT_SEPARATORS);
+    unisets::Key groupingKey = strictSeparators ? unisets::UNISET_KEY_STRICT_ALL_SEPARATORS
+                                                : unisets::UNISET_KEY_ALL_SEPARATORS;
 
-    // Parsing is very lenient even in strict mode, almost any dot or comma is a
-    // grouping separator. Parsing strings like "1.234" in French was treating '.'
-    // like an ignorable grouping separator, and we want it to be excluded.
-    // We keep the public behavior when strictParse is false, but when it is true
-    // we restrict grouping separators to the smaller set of equivalents.
-    unisets::Key groupingKey = unisets::chooseFrom(groupingSeparator,
-            strictSeparators ? unisets::STRICT_COMMA : unisets::ALL_SEPARATORS,
-            strictSeparators ? unisets::STRICT_PERIOD : unisets::ALL_SEPARATORS);
-    if (groupingKey < 0) {
-        groupingKey = unisets::chooseFrom(
-            groupingSeparator, unisets::OTHER_GROUPING_SEPARATORS);
-    }
-    if (groupingKey >= 0) {
-        // Attempt to find separators in the static cache
-        groupingUniSet = unisets::get(groupingKey);
-    } else if (!groupingSeparator.isEmpty()) {
-        auto* set = new UnicodeSet();
-        set->add(groupingSeparator.char32At(0));
-        set->freeze();
-        groupingUniSet = set;
-        fLocalGroupingUniSet.adoptInstead(set);
-    } else {
-        groupingUniSet = unisets::get(unisets::EMPTY);
-    }
+    // Attempt to find separators in the static cache
 
+    groupingUniSet = unisets::get(groupingKey);
     unisets::Key decimalKey = unisets::chooseFrom(
             decimalSeparator,
-            strictSeparators ? unisets::STRICT_COMMA : unisets::COMMA,
-            strictSeparators ? unisets::STRICT_PERIOD : unisets::PERIOD);
+            strictSeparators ? unisets::UNISET_KEY_STRICT_COMMA : unisets::UNISET_KEY_COMMA,
+            strictSeparators ? unisets::UNISET_KEY_STRICT_PERIOD : unisets::UNISET_KEY_PERIOD);
     if (decimalKey >= 0) {
         decimalUniSet = unisets::get(decimalKey);
     } else if (!decimalSeparator.isEmpty()) {
@@ -72,15 +53,15 @@ DecimalMatcher::DecimalMatcher(const DecimalFormatSymbols& symbols, const Groupe
         decimalUniSet = set;
         fLocalDecimalUniSet.adoptInstead(set);
     } else {
-        decimalUniSet = unisets::get(unisets::EMPTY);
+        decimalUniSet = unisets::get(unisets::UNISET_KEY_EMPTY);
     }
 
     if (groupingKey >= 0 && decimalKey >= 0) {
         // Everything is available in the static cache
         separatorSet = groupingUniSet;
         leadSet = unisets::get(
-                strictSeparators ? unisets::DIGITS_OR_ALL_SEPARATORS
-                                 : unisets::DIGITS_OR_STRICT_ALL_SEPARATORS);
+                strictSeparators ? unisets::UNISET_KEY_DIGITS_OR_ALL_SEPARATORS
+                                 : unisets::UNISET_KEY_DIGITS_OR_STRICT_ALL_SEPARATORS);
     } else {
         auto* set = new UnicodeSet();
         set->addAll(*groupingUniSet);
@@ -94,7 +75,7 @@ DecimalMatcher::DecimalMatcher(const DecimalFormatSymbols& symbols, const Groupe
     UChar32 cpZero = symbols.getCodePointZero();
     if (cpZero == -1 || !u_isdigit(cpZero) || u_digit(cpZero, 10) != 0) {
         // Uncommon case: okay to allocate.
-        auto* digitStrings = new UnicodeString[10];
+        auto digitStrings = new UnicodeString[10];
         fLocalDigitStrings.adoptInstead(digitStrings);
         for (int32_t i = 0; i <= 9; i++) {
             digitStrings[i] = symbols.getConstDigitSymbol(i);
@@ -108,7 +89,7 @@ DecimalMatcher::DecimalMatcher(const DecimalFormatSymbols& symbols, const Groupe
     grouping2 = grouper.getSecondary();
 
     // Fraction grouping parsing is disabled for now but could be enabled later.
-    // See https://unicode-org.atlassian.net/browse/ICU-10794
+    // See http://bugs.icu-project.org/trac/ticket/10794
     // fractionGrouping = 0 != (parseFlags & PARSE_FLAG_FRACTION_GROUPING_ENABLED);
 }
 

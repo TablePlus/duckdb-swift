@@ -12,13 +12,14 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/type_util.hpp"
 #include "duckdb/common/types/cast_helpers.hpp"
-#include "duckdb/common/types/datetime.hpp"
-#include "duckdb/common/types/timestamp_base.hpp"
 
 namespace duckdb {
 
 struct interval_t;
 struct date_t;
+struct timestamp_t;
+struct dtime_t;
+struct dtime_tz_t;
 
 struct SubtractOperator {
 	template <class TA, class TB, class TR>
@@ -43,8 +44,6 @@ template <>
 timestamp_t SubtractOperator::Operation(timestamp_t left, interval_t right);
 template <>
 interval_t SubtractOperator::Operation(timestamp_t left, timestamp_t right);
-template <>
-int64_t SubtractOperator::Operation(timestamp_t left, timestamp_t right);
 
 struct TrySubtractOperator {
 	template <class TA, class TB, class TR>
@@ -118,11 +117,6 @@ struct DecimalSubtractOverflowCheck {
 
 template <>
 hugeint_t DecimalSubtractOverflowCheck::Operation(hugeint_t left, hugeint_t right);
-
-template <>
-inline bool TrySubtractOperator::Operation(timestamp_t left, timestamp_t right, int64_t &result) {
-	return TrySubtractOperator::Operation(left.value, right.value, result);
-}
 
 struct SubtractTimeOperator {
 	template <class TA, class TB, class TR>

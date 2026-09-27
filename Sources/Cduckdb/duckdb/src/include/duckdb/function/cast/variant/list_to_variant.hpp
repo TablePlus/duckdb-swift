@@ -1,6 +1,5 @@
 #pragma once
 
-#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/function/cast/variant/to_variant_fwd.hpp"
 
 namespace duckdb {
@@ -51,10 +50,11 @@ bool ConvertListToVariant(ToVariantSourceData &source, ToVariantGlobalResultData
 		}
 	}
 	//! Now write the child vector of the list (for all rows)
-	auto &entry = ListVector::GetChildMutable(source.vec);
+	auto &entry = ListVector::GetEntry(source.vec);
 	auto child_size = ListVector::GetListSize(source.vec);
 	if (sel.count != list_size) {
-		Vector sliced_entry(entry, sel.non_null_selection, sel.count);
+		Vector sliced_entry(entry.GetType(), nullptr);
+		sliced_entry.Dictionary(entry, list_size, sel.non_null_selection, sel.count);
 		ToVariantSourceData child_source_data(sliced_entry, sel.count);
 		return ConvertToVariant<WRITE_DATA, false>(child_source_data, result, sel.count, &sel.new_selection,
 		                                           &sel.children_selection, false);

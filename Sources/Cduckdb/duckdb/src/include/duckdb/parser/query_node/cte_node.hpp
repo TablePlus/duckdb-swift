@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/parser/query_node.hpp"
 
@@ -23,10 +22,10 @@ public:
 	CTENode() : QueryNode(QueryNodeType::CTE_NODE) {
 	}
 
-	Identifier ctename;
+	string ctename;
 	unique_ptr<QueryNode> query;
 	unique_ptr<QueryNode> child;
-	vector<Identifier> aliases;
+	vector<string> aliases;
 
 	CTEMaterialize materialized = CTEMaterialize::CTE_MATERIALIZE_DEFAULT;
 

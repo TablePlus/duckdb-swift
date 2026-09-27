@@ -22,7 +22,7 @@ void DistinctStatistics::Merge(const DistinctStatistics &other) {
 	total_count += other.total_count;
 }
 
-void DistinctStatistics::UpdateSample(const Vector &new_data, idx_t count, Vector &hashes) {
+void DistinctStatistics::UpdateSample(Vector &new_data, idx_t count, Vector &hashes) {
 	total_count += count;
 	const auto original_count = count;
 	const auto sample_rate = new_data.GetType().IsIntegral() ? INTEGRAL_SAMPLE_RATE : BASE_SAMPLE_RATE;
@@ -34,16 +34,16 @@ void DistinctStatistics::UpdateSample(const Vector &new_data, idx_t count, Vecto
 	UpdateInternal(new_data, count, hashes);
 }
 
-void DistinctStatistics::Update(const Vector &new_data, idx_t count, Vector &hashes) {
+void DistinctStatistics::Update(Vector &new_data, idx_t count, Vector &hashes) {
 	total_count += count;
 	UpdateInternal(new_data, count, hashes);
 }
 
-void DistinctStatistics::UpdateInternal(const Vector &new_data, idx_t count, Vector &hashes) {
+void DistinctStatistics::UpdateInternal(Vector &new_data, idx_t count, Vector &hashes) {
 	sample_count += count;
 	VectorOperations::Hash(new_data, hashes, count);
 
-	log->Update(new_data, hashes);
+	log->Update(new_data, hashes, count);
 }
 
 string DistinctStatistics::ToString() const {
