@@ -22,9 +22,6 @@
 #line 0 "src/parser/tableref/joinref.cpp"
 #include "src/parser/tableref/joinref.cpp"
 
-#line 0 "src/parser/tableref/match_recognize_ref.cpp"
-#include "src/parser/tableref/match_recognize_ref.cpp"
-
 #line 0 "src/parser/tableref/pivotref.cpp"
 #include "src/parser/tableref/pivotref.cpp"
 

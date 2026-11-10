@@ -46,6 +46,9 @@
 #line 0 "src/parallel/pipeline_schedule.cpp"
 #include "src/parallel/pipeline_schedule.cpp"
 
+#line 0 "src/parallel/progress_verifier.cpp"
+#include "src/parallel/progress_verifier.cpp"
+
 #line 0 "src/parallel/scan_read_ahead.cpp"
 #include "src/parallel/scan_read_ahead.cpp"
 

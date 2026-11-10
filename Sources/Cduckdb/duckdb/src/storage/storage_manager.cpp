@@ -1,6 +1,7 @@
 #include "duckdb/storage/storage_manager.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/enums/checkpoint_abort.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -10,6 +11,7 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/valid_checker.hpp"
 #include "duckdb/storage/checkpoint_manager.hpp"
 #include "duckdb/storage/in_memory_block_manager.hpp"
 #include "duckdb/storage/object_cache.hpp"
@@ -140,7 +142,7 @@ void StorageOptions::Initialize(unordered_map<string, Value> &options) {
 				    entry.second.ToString());
 			}
 		} else if (entry.first == "mmap_reserve_size") {
-			mmap_reserve_size = DBConfig::ParseMemoryLimit(entry.second.ToString());
+			mmap_reserve_size = DBConfig::ParseMemoryLimitOrMaximum(entry.second.ToString());
 		} else {
 			throw BinderException("Unrecognized option for attach \"%s\"", entry.first);
 		}
@@ -256,22 +258,13 @@ bool StorageManager::WALStartCheckpoint(MetaBlockPointer meta_block, CheckpointO
 		// not holding the WAL lock yet - grab it
 		guard = GetWALLock();
 	}
-	// drain under the WAL lock before the checkpoint transaction starts: its snapshot would
-	// otherwise be bounded below commits whose WAL this checkpoint deletes
-	auto &transaction_manager = DuckTransactionManager::Get(db);
-	transaction_manager.WaitForDurability();
-	if (options.type == CheckpointType::FULL_CHECKPOINT &&
-	    transaction_manager.GetLastCommit() >= transaction_manager.LowestVisibilityBound()) {
-		// an active bounded snapshot still needs state a full checkpoint would vacuum away
-		options.type = CheckpointType::CONCURRENT_CHECKPOINT;
-	}
-
 	if (active_checkpoint.HasCheckpointContext()) {
 		// While holding the WAL lock, if we have a context then start a checkpoint transaction.
 		// The start time of this transaction defines the visibility for checkpointing, any new commits are written
 		// to the next WAL.
 		active_checkpoint.GetCheckpointTransaction(options);
 	} else {
+		auto &transaction_manager = db.GetTransactionManager().Cast<DuckTransactionManager>();
 		options.checkpoint_id = transaction_manager.NextCheckpointId();
 		options.visibility_bound = VisibilityBound::Through(transaction_manager.GetLastCommit());
 	}
@@ -330,8 +323,6 @@ void StorageManager::WALFinishCheckpoint(unique_lock<mutex> &) {
 	}
 
 	// we have had writes to the checkpoint WAL - we need to override our WAL with the checkpoint WAL
-	// commits to the checkpoint WAL may still be syncing: drain before destroying the WAL object
-	DuckTransactionManager::Get(db).WaitForDurability();
 	// first close the WAL writer
 	auto checkpoint_wal_path = wal->GetPath();
 	wal.reset();
@@ -631,7 +622,7 @@ public:
 	//! Revert the commit
 	void RevertCommit() override;
 	// Make the commit persistent
-	idx_t FlushCommit(bool sync_now) override;
+	void FlushCommit() override;
 
 	void AddRowGroupData(DataTable &table, idx_t start_index, idx_t count,
 	                     unique_ptr<PersistentCollectionData> row_group_data) override;
@@ -639,6 +630,7 @@ public:
 	bool HasRowGroupData() override;
 
 private:
+	StorageManager &storage;
 	idx_t initial_wal_size = 0;
 	idx_t initial_written = 0;
 	WriteAheadLog &wal;
@@ -647,7 +639,7 @@ private:
 };
 
 SingleFileStorageCommitState::SingleFileStorageCommitState(StorageManager &storage, WriteAheadLog &wal)
-    : wal(wal), state(WALCommitState::IN_PROGRESS) {
+    : storage(storage), wal(wal), state(WALCommitState::IN_PROGRESS) {
 	auto initial_size = storage.GetWALSize();
 	initial_written = wal.GetTotalWritten();
 	initial_wal_size = initial_size;
@@ -679,23 +671,39 @@ void SingleFileStorageCommitState::RevertCommit() {
 		// remove any entries written into the WAL by truncating it
 		wal.Truncate(initial_wal_size);
 	}
+	auto &block_manager = storage.GetBlockManager();
+	for (auto &entry : optimistically_written_data) {
+		for (auto &rg_entry : entry.second) {
+			if (rg_entry.second.row_group_data) {
+				for (auto &block_id : rg_entry.second.row_group_data->GetBlockIds()) {
+					block_manager.MarkBlockAsModified(block_id);
+				}
+			}
+		}
+	}
 	state = WALCommitState::TRUNCATED;
 }
 
-idx_t SingleFileStorageCommitState::FlushCommit(bool sync_now) {
+void SingleFileStorageCommitState::FlushCommit() {
 	if (state != WALCommitState::IN_PROGRESS) {
-		return 0;
+		return;
 	}
+
 	// Move the blocks in this COMMIT into the WAL and mark them as "in use".
-	idx_t wal_sync_offset = 0;
-	if (sync_now) {
-		wal.Flush();
-	} else {
-		// only the marker is written here: the sync happens once the locks are released
-		wal_sync_offset = wal.FlushMarker();
+	auto abort_mode = Settings::Get<DebugCheckpointAbortSetting>(storage.GetDatabase());
+	if (wal.Initialized() && abort_mode == CheckpointAbort::DEBUG_ABORT_BEFORE_WAL_FLUSH) {
+		auto &writer = wal.Initialize();
+		writer.Sync();
+		storage.SetWALSize(writer.GetFileSize());
+		ValidChecker::Invalidate(storage.GetDatabase(), "Simulated crash before WAL_FLUSH write");
+		ValidChecker::Invalidate(storage.GetAttached(), "Simulated crash before WAL_FLUSH write");
+		// Prevent `RevertCommit` from truncating the WAL so the torn records are kept for crash recovery
+		state = WALCommitState::FLUSHED;
+		throw FatalException("Simulated crash before WAL_FLUSH write");
 	}
+
+	wal.Flush();
 	state = WALCommitState::FLUSHED;
-	return wal_sync_offset;
 }
 
 void SingleFileStorageCommitState::AddRowGroupData(DataTable &table, idx_t start_index, idx_t count,

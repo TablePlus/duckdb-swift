@@ -19,6 +19,9 @@
 #line 0 "src/execution/expression_executor_state.cpp"
 #include "src/execution/expression_executor_state.cpp"
 
+#line 0 "src/execution/ie_join_union.cpp"
+#include "src/execution/ie_join_union.cpp"
+
 #line 0 "src/execution/join_hashtable.cpp"
 #include "src/execution/join_hashtable.cpp"
 
@@ -33,6 +36,9 @@
 
 #line 0 "src/execution/physical_plan_generator.cpp"
 #include "src/execution/physical_plan_generator.cpp"
+
+#line 0 "src/execution/radix_ht_adaptivity.cpp"
+#include "src/execution/radix_ht_adaptivity.cpp"
 
 #line 0 "src/execution/radix_partitioned_hashtable.cpp"
 #include "src/execution/radix_partitioned_hashtable.cpp"

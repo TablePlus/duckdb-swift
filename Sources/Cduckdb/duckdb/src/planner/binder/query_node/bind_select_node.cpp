@@ -4,6 +4,8 @@
 #include "duckdb/common/exception/parser_exception.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/aggregate/distributive_function_utils.hpp"
+#include "duckdb/function/aggregate/distributive_functions.hpp"
+#include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -631,12 +633,13 @@ BoundStatement Binder::BindSelectNode(SelectNode &statement, BoundStatement from
 				// if there is a collation on a group x, we should group by the collated expr,
 				// but also push a first(x) aggregate in case x is selected (uncollated)
 
-				auto first_fun = FirstFunctionGetter::GetFunction(uncollated_expr->GetReturnType());
+				auto first_fun =
+				    GetBuiltinAggregateFunction(context, FirstFun::Name, {uncollated_expr->GetReturnType()});
 				vector<unique_ptr<Expression>> first_children;
 				first_children.push_back(std::move(uncollated_expr));
 
 				FunctionBinder function_binder(*this);
-				auto function = function_binder.BindAggregateFunction(first_fun, std::move(first_children));
+				auto function = function_binder.BindAggregateFunction(std::move(first_fun), std::move(first_children));
 				function->SetAlias("__collated_group");
 
 				auto collated_idx = ColumnBinding::PushExpression(result.aggregates, std::move(function));
@@ -722,15 +725,16 @@ BoundStatement Binder::BindSelectNode(SelectNode &statement, BoundStatement from
 		}
 		bind_state.AddRegularColumn();
 
-		if (can_group_by_all && is_window) {
-			throw BinderException("Cannot group on a window clause");
-		}
 		if (can_group_by_all && result.unnests.SelectList().size() > unnest_count) {
 			throw BinderException("Cannot group on an UNNEST or UNLIST clause");
 		}
 		if (can_group_by_all && select_binder.HasBoundColumns()) {
 			if (select_binder.BoundAggregates()) {
 				throw BinderException("Cannot mix aggregates with non-aggregated columns!");
+			}
+			if (is_window) {
+				// a window over aggregates (e.g. sum(sum(x)) OVER ()) is fine, a window over a group is not
+				throw BinderException("Cannot group on a window clause");
 			}
 			// we are forcing aggregates, and the node has columns bound
 			// this entry becomes a group

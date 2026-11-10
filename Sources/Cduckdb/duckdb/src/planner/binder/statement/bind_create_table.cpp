@@ -43,6 +43,11 @@ static void VerifyCompressionType(ClientContext &context, optional_ptr<StorageMa
 	auto &base = info.base->Cast<CreateTableInfo>();
 	for (auto &col : base.columns.Logical()) {
 		auto compression_type = col.CompressionType();
+		if (col.Generated() && compression_type != CompressionType::COMPRESSION_AUTO) {
+			throw BinderException("Can't set a compression type on generated column %s, generated columns are "
+			                      "not stored",
+			                      col.Name());
+		}
 		auto compression_availability_result = CompressionTypeIsAvailable(compression_type, storage_manager);
 		if (!compression_availability_result.IsAvailable()) {
 			if (compression_availability_result.IsDeprecated()) {
@@ -167,27 +172,9 @@ unique_ptr<BoundConstraint> BindCheckConstraint(Binder &binder, const Constraint
 	return std::move(bound_constraint);
 }
 
-void Binder::VerifyConstraintTimingStorageVersion(const Constraint &constraint, Catalog &catalog, bool temporary) {
-	if (constraint.type != ConstraintType::UNIQUE || temporary || !catalog.IsDuckCatalog() || catalog.InMemory()) {
-		return;
-	}
-	auto &unique = constraint.Cast<UniqueConstraint>();
-	if (unique.timing == ConstraintTiming::DEFAULT) {
-		return;
-	}
-	if (StorageManager::Get(catalog).GetStorageVersion() < StorageVersion::V2_0_0) {
-		throw BinderException("Explicit constraint timing is only supported for storage versions v2.0.0 and higher.\n"
-		                      "Use an in-memory database, or ATTACH with (STORAGE_VERSION 'v2.0.0')");
-	}
-}
-
 unique_ptr<BoundConstraint> Binder::BindUniqueConstraint(const Constraint &constraint, const Identifier &table,
                                                          const ColumnList &columns) {
 	auto &unique = constraint.Cast<UniqueConstraint>();
-	if (unique.IsDeferred()) {
-		throw NotImplementedException("Deferred %s constraints are not implemented yet",
-		                              unique.IsPrimaryKey() ? "PRIMARY KEY" : "UNIQUE");
-	}
 
 	// Resolve the columns.
 	vector<PhysicalIndex> indexes;
@@ -465,7 +452,7 @@ static void FindForeignKeyIndexes(const ColumnList &columns, const vector<Identi
 		}
 		auto &column = columns.GetColumn(name);
 		if (column.Generated()) {
-			throw BinderException("Failed to create foreign key: referenced column \"%s\" is a generated column",
+			throw BinderException("Failed to create foreign key: referenced column %s is a generated column",
 			                      column.Name());
 		}
 		indexes.push_back(column.Physical());
@@ -633,6 +620,7 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 	auto &base = result->Base();
 	base.dependencies = LogicalDependencyList();
 	auto &dependencies = base.dependencies;
+	dependencies.AddDependency(schema);
 	auto &catalog = schema.ParentCatalog();
 	optional_ptr<StorageManager> storage_manager;
 	if (catalog.IsDuckCatalog() && !catalog.InMemory()) {
@@ -719,9 +707,6 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 			throw BinderException("Constraints on generated columns are not supported yet");
 		}
 		bound_constraints = BindNewConstraints(base.constraints, base.GetTableName(), base.columns);
-		for (auto &constraint : base.constraints) {
-			VerifyConstraintTimingStorageVersion(*constraint, catalog, base.temporary);
-		}
 		if (bind_mode != AlterBindMode::SKIP_BINDING) {
 			// bind the default values
 			auto &catalog_name = schema.ParentCatalog().GetName();
@@ -747,8 +732,6 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 	}
 #endif
 
-	auto &properties = GetStatementProperties();
-	properties.output_type = QueryResultOutputType::FORCE_MATERIALIZED;
 	return result;
 }
 

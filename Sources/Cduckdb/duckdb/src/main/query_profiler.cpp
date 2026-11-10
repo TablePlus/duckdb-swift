@@ -159,7 +159,7 @@ void QueryProfiler::StartQuery(const string &query, bool is_explain_analyze_p, b
 	}
 	Start(query);
 }
-void QueryProfiler::AddParserTime(const Profiler &parser_timer) {
+void QueryProfiler::AddParserTime(const Profiler &parser_timer, timestamp_t start_time, timestamp_t end_time) {
 	if (!running || !IsEnabled()) {
 		return;
 	}
@@ -167,7 +167,7 @@ void QueryProfiler::AddParserTime(const Profiler &parser_timer) {
 	if (!parser_time_ns) {
 		return;
 	}
-	query_metrics.UpdateMetric(MetricParserTotalTime::Name, parser_time_ns);
+	query_metrics.UpdateMetric(MetricParserTotalTime::Name, parser_time_ns, start_time, end_time);
 }
 
 bool QueryProfiler::OperatorRequiresProfiling(const PhysicalOperatorType op_type) {
@@ -267,16 +267,12 @@ void QueryProfiler::FinalizeMetrics() {
 	FinalizeMetricsInternal();
 }
 
-void QueryProfiler::TrackBytesRead(const idx_t amount, const idx_t elapsed_us) {
-	query_metrics.UpdateBytesRead(amount, elapsed_us);
+void QueryProfiler::TrackBytesRead(const idx_t amount) {
+	query_metrics.UpdateBytesRead(amount);
 }
 
-void QueryProfiler::TrackBytesWritten(const idx_t amount, const idx_t elapsed_us) {
-	query_metrics.UpdateBytesWritten(amount, elapsed_us);
-}
-
-void QueryProfiler::TrackBytesSpilled(const idx_t amount) {
-	query_metrics.UpdateBytesSpilled(amount);
+void QueryProfiler::TrackBytesWritten(const idx_t amount) {
+	query_metrics.UpdateBytesWritten(amount);
 }
 
 void QueryProfiler::TrackTotalMemoryAllocated(const idx_t amount) {
@@ -546,6 +542,9 @@ void OperatorProfiler::Flush(const PhysicalOperator &phys_op) {
 }
 
 void QueryProfiler::Flush(OperatorProfiler &profiler) {
+	if (!running.load(std::memory_order_relaxed)) {
+		return;
+	}
 	lock_guard<std::mutex> guard(lock);
 	if (!IsEnabled() || !running) {
 		return;
@@ -578,6 +577,9 @@ void QueryProfiler::Flush(OperatorProfiler &profiler) {
 }
 
 void QueryProfiler::SetBlockedTime(const double &blocked_thread_time) {
+	if (!running.load(std::memory_order_relaxed)) {
+		return;
+	}
 	lock_guard<std::mutex> guard(lock);
 	if (!IsEnabled() || !running) {
 		return;
@@ -841,7 +843,7 @@ void QueryProfiler::ToLogInternal() const {
 	if (!root) {
 		return;
 	}
-	metrics->WriteMetricsToLog(context);
+	metrics->WriteMetricsToLog(context, query_metrics.GetMetricTimings());
 }
 
 void QueryProfiler::ToLog() const {
@@ -943,13 +945,8 @@ unique_ptr<QueryProfileResult> QueryProfiler::ToLegacyResultTree() const {
 
 	emit("total_memory_allocated", "system.total_memory_allocated");
 	emit("total_bytes_written", "io.total_bytes_written");
-	emit("total_write_operations", "io.total_write_operations");
 	emit("total_bytes_read", "io.total_bytes_read");
-	emit("total_read_operations", "io.total_read_operations");
-	emit("total_write_time", "io.total_write_time");
-	emit("total_read_time", "io.total_read_time");
 	emit("system_peak_temp_dir_size", "system.peak_temp_dir_size");
-	emit("total_bytes_spilled", "system.total_bytes_spilled");
 	emit("system_peak_buffer_memory", "system.peak_buffer_memory");
 	emit("system_peak_streaming_buffer_size", "system.peak_streaming_buffer_size");
 
@@ -1009,6 +1006,17 @@ QueryProfileResult &QueryProfiler::GetResult() {
 		result_tree = ToResultTree();
 	}
 	return *result_tree;
+}
+
+void QueryProfiler::GetFinalizedProfileUnderLock(
+    const std::function<void(optional_ptr<const GatheredMetrics>, optional_ptr<const ProfilingNode>)> &callback) const {
+	lock_guard<std::mutex> guard(lock);
+	// a profile left over from before profiling was disabled is stale, and a running one is not finalized yet
+	if (!IsEnabled() || running || !metrics_finalized) {
+		callback(nullptr, nullptr);
+		return;
+	}
+	callback(metrics.get(), root.get());
 }
 
 bool QueryProfiler::HasRoot() const {

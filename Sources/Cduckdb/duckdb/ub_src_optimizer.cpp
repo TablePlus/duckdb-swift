@@ -13,9 +13,6 @@
 #line 0 "src/optimizer/build_probe_side_optimizer.cpp"
 #include "src/optimizer/build_probe_side_optimizer.cpp"
 
-#line 0 "src/optimizer/builtin_function_lookup.cpp"
-#include "src/optimizer/builtin_function_lookup.cpp"
-
 #line 0 "src/optimizer/column_binding_replacer.cpp"
 #include "src/optimizer/column_binding_replacer.cpp"
 
@@ -42,6 +39,12 @@
 
 #line 0 "src/optimizer/cte_inlining.cpp"
 #include "src/optimizer/cte_inlining.cpp"
+
+#line 0 "src/optimizer/cte_join_filter_collector.cpp"
+#include "src/optimizer/cte_join_filter_collector.cpp"
+
+#line 0 "src/optimizer/cte_join_filter_pusher.cpp"
+#include "src/optimizer/cte_join_filter_pusher.cpp"
 
 #line 0 "src/optimizer/deliminator.cpp"
 #include "src/optimizer/deliminator.cpp"
@@ -120,6 +123,9 @@
 
 #line 0 "src/optimizer/remove_duplicate_groups.cpp"
 #include "src/optimizer/remove_duplicate_groups.cpp"
+
+#line 0 "src/optimizer/remove_redundant_order_keys.cpp"
+#include "src/optimizer/remove_redundant_order_keys.cpp"
 
 #line 0 "src/optimizer/remove_unused_columns.cpp"
 #include "src/optimizer/remove_unused_columns.cpp"

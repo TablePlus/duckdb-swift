@@ -28,9 +28,6 @@
 #line 0 "src/planner/expression_binder/lateral_binder.cpp"
 #include "src/planner/expression_binder/lateral_binder.cpp"
 
-#line 0 "src/planner/expression_binder/match_recognize_binder.cpp"
-#include "src/planner/expression_binder/match_recognize_binder.cpp"
-
 #line 0 "src/planner/expression_binder/order_binder.cpp"
 #include "src/planner/expression_binder/order_binder.cpp"
 
