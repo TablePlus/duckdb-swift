@@ -160,7 +160,7 @@ extension Vector {
   }
   
   func unwrap(_ type: Data.Type, at index: Int) throws -> Data {
-    try assertNonNullTypeMatch(of: type, at: index, withColumnType: .blob)
+    try assertNonNullTypeMatch(of: type, at: index, withColumnTypes: [.blob, .geometry])
     return unsafelyUnwrapElement(as: duckdb_blob.self, at: index) { $0.asData }
   }
   
